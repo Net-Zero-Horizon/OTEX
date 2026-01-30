@@ -69,6 +69,10 @@ python scripts/regional_batch.py --regions Philippines Jamaica Hawaii
 - xarray, netCDF4 (for oceanographic data)
 - CoolProp (optional, for additional working fluids)
 
+## Aknowledgments
+OTEX is built uppon the basis of a repository called pyOTEC (https://github.com/JKALanger/pyOTEC), read more about it here:
+Langer, J., Blok, K. The global techno-economic potential of floating, closed-cycle ocean thermal energy conversion. J. Ocean Eng. Mar. Energy (2023). https://doi.org/10.1007/s40722-023-00301-1
+
 ## Citation
 
 If you use OTEX in your research, please cite:
