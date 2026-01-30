@@ -73,8 +73,6 @@ python scripts/regional_batch.py --regions Philippines Jamaica Hawaii
 
 If you use OTEX in your research, please cite:
 
-> Langer et al. (2023). "The global economic potential of ocean thermal energy conversion." *Energy & Environmental Science*.
-
 ## License
 
 MIT License
