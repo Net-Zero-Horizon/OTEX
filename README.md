@@ -1,4 +1,6 @@
+![logo](/img/logo.png)
 # OTEX - Ocean Thermal Energy eXchange
+[![CI](https://github.com/msotocalvo/OTEX/actions/workflows/workflow.yml/badge.svg)](https://github.com/msotocalvo/OTEX/actions/workflows/workflow.yml)
 
 OTEX is a Python library for Ocean Thermal Energy Conversion (OTEC) plant design, simulation, and techno-economic analysis.
 
