@@ -15,7 +15,7 @@ class TestGetWorkingFluid:
         """Should return ammonia fluid by default."""
         fluid = get_working_fluid()
         assert fluid is not None
-        assert 'ammonia' in fluid.__class__.__name__.lower() or 'nh3' in fluid.name.lower()
+        assert 'ammonia' in fluid.__class__.__name__.lower() or 'ammonia' in fluid.name.lower() or 'nh3' in fluid.name.lower()
 
     def test_ammonia_explicit(self):
         """Should return ammonia when explicitly requested."""

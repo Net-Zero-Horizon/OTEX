@@ -63,6 +63,26 @@ class SobolResults:
             'output': self.output_name
         }
 
+    def to_dataframe(self, config=None):
+        """
+        Return a pandas DataFrame with the Sobol sensitivity indices.
+
+        Columns include ``ST_rank``, ``S1_rank``, ``parameter``, ``category``,
+        ``S1``, ``S1_conf``, ``ST``, ``ST_conf``, ``interactions``,
+        ``S1_pct``, ``ST_pct``, and ``output_name``.
+
+        Parameters
+        ----------
+        config : UncertaintyConfig, optional
+            If provided, adds parameter categories.
+
+        Returns
+        -------
+        pd.DataFrame
+        """
+        from .export import make_sobol_df
+        return make_sobol_df(self, config=config)
+
 
 @dataclass
 class TornadoResults:
@@ -114,6 +134,26 @@ class TornadoResults:
             'ranking': self.get_ranking(),
             'output': self.output_name
         }
+
+    def to_dataframe(self, config=None):
+        """
+        Return a pandas DataFrame with the OAT (tornado) sensitivity results.
+
+        Columns include ``rank``, ``parameter``, ``category``, ``nominal``,
+        ``low_bound``, ``high_bound``, ``output_baseline``, ``output_at_low``,
+        ``output_at_high``, ``swing_abs``, ``swing_pct``, and ``output_name``.
+
+        Parameters
+        ----------
+        config : UncertaintyConfig, optional
+            If provided, adds parameter categories, nominals, and bounds.
+
+        Returns
+        -------
+        pd.DataFrame
+        """
+        from .export import make_tornado_df
+        return make_tornado_df(self, config=config)
 
 
 def _run_model(

@@ -43,6 +43,10 @@ from .plant import (
 from .economics import (
     capex_opex_lcoe,
     lcoe_time_series,
+    CostScheme,
+    LOW_COST,
+    HIGH_COST,
+    get_cost_scheme,
 )
 
 # Regional analysis - lazy import to avoid copernicusmarine dependency at package import
@@ -76,6 +80,10 @@ __all__ = [
     # Economics
     "capex_opex_lcoe",
     "lcoe_time_series",
+    "CostScheme",
+    "LOW_COST",
+    "HIGH_COST",
+    "get_cost_scheme",
     # Regional
     "run_regional_analysis",
 ]

@@ -62,6 +62,8 @@ def main():
     # Output options
     parser.add_argument('--save-plots', action='store_true',
                         help='Save plots to files')
+    parser.add_argument('--export', action='store_true',
+                        help='Export full results bundle (CSV + JSON) to --output-dir')
     parser.add_argument('--output-dir', type=str, default='.',
                         help='Directory for output files (default: current)')
     parser.add_argument('--no-parallel', action='store_true',
@@ -83,7 +85,8 @@ def main():
             MonteCarloAnalysis, UncertaintyConfig,
             SobolAnalysis, TornadoAnalysis,
             plot_histogram, plot_tornado, plot_sobol_indices,
-            create_summary_figure
+            create_summary_figure,
+            export_analysis,
         )
     except ImportError as e:
         print(f"Error importing otex.analysis: {e}")
@@ -217,6 +220,28 @@ def main():
             fig.savefig(output_dir / f'summary_{args.output}.png', dpi=150)
             plt.close(fig)
             print(f"\nSaved: summary_{args.output}.png")
+
+    # Full results export
+    if args.export:
+        print(f"\n{'='*60}")
+        print("EXPORTING RESULTS")
+        print(f"{'='*60}")
+        export_analysis(
+            output_dir=output_dir,
+            mc_results=mc_results,
+            tornado_results=tornado_results,
+            sobol_results=sobol_results,
+            metadata={
+                'T_WW':       args.T_WW,
+                'T_CW':       args.T_CW,
+                'delta_T':    args.T_WW - args.T_CW,
+                'p_gross_kW': args.p_gross,
+                'cost_level': args.cost_level,
+                'method':     args.method,
+                'output_var': args.output,
+                'seed':       args.seed,
+            },
+        )
 
     print(f"\n{'='*60}")
     print("Analysis complete.")

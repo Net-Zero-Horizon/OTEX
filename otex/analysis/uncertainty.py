@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
-from scipy.stats import qmc
+from scipy.stats import qmc, skew, kurtosis
 from tqdm import tqdm
 
 from .distributions import UncertaintyConfig, UncertainParameter
@@ -70,15 +70,34 @@ class UncertaintyResults:
                 f'{name}_min': np.min(valid),
                 f'{name}_max': np.max(valid),
                 f'{name}_p5': np.percentile(valid, 5),
+                f'{name}_p10': np.percentile(valid, 10),
                 f'{name}_p25': np.percentile(valid, 25),
                 f'{name}_p75': np.percentile(valid, 75),
+                f'{name}_p90': np.percentile(valid, 90),
                 f'{name}_p95': np.percentile(valid, 95),
                 f'{name}_cv': np.std(valid) / np.mean(valid) if np.mean(valid) != 0 else np.nan,
+                f'{name}_skewness': float(skew(valid)),
+                f'{name}_kurtosis': float(kurtosis(valid)),
                 f'{name}_n_valid': len(valid),
                 f'{name}_n_invalid': len(values) - len(valid)
             }
 
         return stats
+
+    def to_dataframe(self):
+        """
+        Return a tidy pandas DataFrame with all MC samples and outputs.
+
+        Each row is one simulation run.  Columns are the uncertain parameter
+        names followed by ``lcoe``, ``net_power``, ``capex``, ``opex``, and
+        ``valid`` (bool — True if the run converged).
+
+        Returns
+        -------
+        pd.DataFrame
+        """
+        from .export import make_samples_df
+        return make_samples_df(self)
 
     def get_confidence_interval(
         self, output: str = 'lcoe', confidence: float = 0.90

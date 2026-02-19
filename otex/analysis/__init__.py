@@ -66,6 +66,17 @@ from .visualization import (
     create_summary_figure,
 )
 
+# Export
+from .export import (
+    export_analysis,
+    make_samples_df,
+    make_statistics_df,
+    make_correlations_df,
+    make_parameters_df,
+    make_tornado_df,
+    make_sobol_df,
+)
+
 __all__ = [
     # Distributions
     "UncertainParameter",
@@ -87,4 +98,12 @@ __all__ = [
     "plot_cumulative_distribution",
     "plot_comparison",
     "create_summary_figure",
+    # Export
+    "export_analysis",
+    "make_samples_df",
+    "make_statistics_df",
+    "make_correlations_df",
+    "make_parameters_df",
+    "make_tornado_df",
+    "make_sobol_df",
 ]

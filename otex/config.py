@@ -8,8 +8,10 @@ are defined here with sensible defaults.
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Optional, Literal, Tuple, Dict, Any
+from typing import Optional, Literal, Tuple, Dict, Any, Union
 import numpy as np
+
+from .economics.cost_schemes import CostScheme
 
 
 @dataclass
@@ -136,8 +138,9 @@ class Economics:
     discount_rate: float = 0.10         # Discount rate (10%)
     availability: float = 0.914         # Capacity factor (8000/8760 hours)
 
-    # Cost level affects pipe material and component costs
-    cost_level: Literal['low_cost', 'high_cost'] = 'low_cost'
+    # Cost level affects pipe material and component costs.
+    # Accepts built-in scheme names ('low_cost', 'high_cost') or a CostScheme object.
+    cost_level: Union[Literal['low_cost', 'high_cost'], CostScheme] = 'low_cost'
 
     # Transmission
     threshold_AC_DC: float = 50.0       # km - Distance threshold for DC vs AC
@@ -266,9 +269,12 @@ class OTEXConfig:
         parameters_and_constants() function.
         """
         # Pipe material based on cost level
-        rho_pipe = (self.physical.rho_pipe_hdpe
-                   if self.economics.cost_level == 'low_cost'
-                   else self.physical.rho_pipe_frp)
+        if isinstance(self.economics.cost_level, CostScheme):
+            rho_pipe = self.economics.cost_level.pipe_density
+        elif self.economics.cost_level == 'low_cost':
+            rho_pipe = self.physical.rho_pipe_hdpe
+        else:
+            rho_pipe = self.physical.rho_pipe_frp
 
         # Build legacy format
         legacy = {
@@ -467,7 +473,7 @@ def get_default_config(**kwargs) -> OTEXConfig:
 # Legacy compatibility function
 def parameters_and_constants(
     p_gross: float = -136000,
-    cost_level: str = 'low_cost',
+    cost_level: Union[str, CostScheme] = 'low_cost',
     data: str = 'CMEMS',
     fluid_type: str = 'ammonia',
     cycle_type: str = 'rankine_closed',
@@ -483,7 +489,7 @@ def parameters_and_constants(
 
     Args:
         p_gross: Gross power output in kW (negative = power output)
-        cost_level: 'low_cost' or 'high_cost'
+        cost_level: 'low_cost', 'high_cost', or a CostScheme object
         data: Data source ('CMEMS' or 'HYCOM')
         fluid_type: Working fluid type
         cycle_type: Thermodynamic cycle type

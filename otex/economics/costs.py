@@ -7,6 +7,8 @@ Created on Wed Feb 22 10:56:12 2023
 
 import numpy as np
 
+from .cost_schemes import CostScheme, get_cost_scheme
+
 def capex_opex_lcoe(otec_plant_nom,inputs,cost_level='low_cost'):
     """
     Calculate CAPEX, OPEX, and LCOE for OTEC plant
@@ -14,6 +16,7 @@ def capex_opex_lcoe(otec_plant_nom,inputs,cost_level='low_cost'):
     Extended to support:
     - Uncertainty analysis through cost multipliers in inputs
     - Onshore vs offshore installations
+    - Custom cost schemes via CostScheme objects
 
     Cost multipliers:
     - capex_turbine_factor, capex_HX_factor, etc.: Multiply base costs
@@ -26,7 +29,12 @@ def capex_opex_lcoe(otec_plant_nom,inputs,cost_level='low_cost'):
     Args:
         otec_plant_nom: Nominal plant design dictionary
         inputs: Parameters including cost factors and installation_type
-        cost_level: 'low_cost' or 'high_cost'
+        cost_level: 'low_cost', 'high_cost', or a CostScheme object.
+            Use a CostScheme to define fully custom cost parameters or
+            derive one from a built-in scheme with dataclasses.replace():
+                from otex.economics import LOW_COST
+                from dataclasses import replace
+                scheme = replace(LOW_COST, turbine_coeff=400)
 
     Returns:
         CAPEX_OPEX_dict: Dictionary with component costs
@@ -62,28 +70,17 @@ def capex_opex_lcoe(otec_plant_nom,inputs,cost_level='low_cost'):
     deploy_factor = inputs.get('capex_deploy_factor', 1.0)
     opex_factor = inputs.get('opex_factor', 1.0)
 
-    if cost_level == 'low_cost':
-        capex_turbine = 328*(136000/-p_gross)**0.16 * turbine_factor
-        capex_HX = 226*(80000/-p_gross)**0.16 * hx_factor
-        capex_pump = 1674*(5600/p_pump_total)**0.38 * pump_factor
-        capex_pipes = 9 * pipes_factor  # to divide : material, fabrication, transport, installation cost
-        capex_structure = 4465*(28100/-p_gross)**0.35 * structure_factor
-        capex_deploy = 650 * deploy_factor
-        capex_controls = 3113*(3960/-p_gross)**0.70
-        capex_extra = 0.05
-        opex = 0.03 * opex_factor
-    elif cost_level == 'high_cost':
-        capex_turbine = 512*(136000/-p_gross)**0.16 * turbine_factor
-        capex_HX = 916*(4400/-p_gross)**0.093 * hx_factor
-        capex_pump = 2480*(5600/p_pump_total)**0.38 * pump_factor
-        capex_pipes = 30.1 * pipes_factor
-        capex_structure = 7442*(28100/-p_gross)**0.35 * structure_factor
-        capex_deploy = 667 * deploy_factor
-        capex_controls = 6085*(4400/-p_gross)**0.70
-        capex_extra = 0.2
-        opex = 0.05 * opex_factor
-    else:
-        raise ValueError('Invalid cost level. Valid inputs are "low_cost" and "high_cost"')
+    scheme = get_cost_scheme(cost_level)
+
+    capex_turbine   = scheme.turbine_coeff   * (scheme.turbine_ref_power   / -p_gross)      ** scheme.turbine_exp   * turbine_factor
+    capex_HX        = scheme.hx_coeff        * (scheme.hx_ref_power        / -p_gross)      ** scheme.hx_exp        * hx_factor
+    capex_pump      = scheme.pump_coeff      * (scheme.pump_ref_power      /  p_pump_total) ** scheme.pump_exp      * pump_factor
+    capex_pipes     = scheme.pipes_coeff     * pipes_factor
+    capex_structure = scheme.structure_coeff * (scheme.structure_ref_power / -p_gross)      ** scheme.structure_exp * structure_factor
+    capex_deploy    = scheme.deploy_coeff    * deploy_factor
+    capex_controls  = scheme.controls_coeff  * (scheme.controls_ref_power  / -p_gross)      ** scheme.controls_exp
+    capex_extra     = scheme.capex_extra_fraction
+    opex            = scheme.opex_fraction   * opex_factor
     
     # ===========================================================================
     # INSTALLATION TYPE-SPECIFIC COST ADJUSTMENTS

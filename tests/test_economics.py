@@ -5,7 +5,9 @@ Tests for otex.economics module.
 
 import pytest
 import numpy as np
-from otex.config import parameters_and_constants, Economics
+from dataclasses import replace
+from otex.config import parameters_and_constants, Economics, OTEXConfig
+from otex.economics import CostScheme, LOW_COST, HIGH_COST, get_cost_scheme
 
 
 class TestEconomicsConfig:
@@ -70,6 +72,76 @@ class TestCostLevel:
 
         assert inputs_low['cost_level'] == 'low_cost'
         assert inputs_high['cost_level'] == 'high_cost'
+
+
+class TestCostScheme:
+    """Tests for custom CostScheme support."""
+
+    def test_get_cost_scheme_returns_low_cost(self):
+        """get_cost_scheme('low_cost') should return the LOW_COST singleton."""
+        assert get_cost_scheme('low_cost') is LOW_COST
+
+    def test_get_cost_scheme_returns_high_cost(self):
+        """get_cost_scheme('high_cost') should return the HIGH_COST singleton."""
+        assert get_cost_scheme('high_cost') is HIGH_COST
+
+    def test_get_cost_scheme_passthrough(self):
+        """get_cost_scheme(scheme) should return the same CostScheme object."""
+        custom = CostScheme(turbine_coeff=400.0)
+        assert get_cost_scheme(custom) is custom
+
+    def test_get_cost_scheme_invalid_string(self):
+        """An unknown string should raise ValueError with a helpful message."""
+        with pytest.raises(ValueError, match='CostScheme'):
+            get_cost_scheme('nonexistent_scheme')
+
+    def test_get_cost_scheme_invalid_type(self):
+        """A non-string, non-CostScheme argument should raise TypeError."""
+        with pytest.raises(TypeError):
+            get_cost_scheme(42)
+
+    def test_builtin_schemes_differ(self):
+        """LOW_COST and HIGH_COST must have different parameters."""
+        assert LOW_COST.turbine_coeff != HIGH_COST.turbine_coeff
+        assert LOW_COST.pipes_coeff != HIGH_COST.pipes_coeff
+        assert LOW_COST.opex_fraction != HIGH_COST.opex_fraction
+        assert LOW_COST.pipe_density != HIGH_COST.pipe_density
+
+    def test_custom_scheme_from_scratch(self):
+        """A CostScheme defined from scratch should be accepted by Economics."""
+        custom = CostScheme(
+            turbine_coeff=400.0,
+            opex_fraction=0.04,
+            pipe_density=1000.0,
+        )
+        econ = Economics(cost_level=custom)
+        assert econ.cost_level is custom
+
+    def test_derived_scheme_with_replace(self):
+        """replace() should produce a distinct CostScheme with the modified field."""
+        modified = replace(LOW_COST, turbine_coeff=999.0)
+        assert modified.turbine_coeff == 999.0
+        assert modified.opex_fraction == LOW_COST.opex_fraction
+        assert modified is not LOW_COST
+
+    def test_custom_scheme_pipe_density_in_legacy_dict(self):
+        """A CostScheme with a custom pipe_density should propagate to inputs dict."""
+        custom = replace(LOW_COST, pipe_density=1050.0)
+        inputs = parameters_and_constants(cost_level=custom)
+        assert inputs['rho_pipe'] == pytest.approx(1050.0)
+
+    def test_custom_scheme_stored_in_inputs(self):
+        """The CostScheme object itself should be stored under 'cost_level' in the dict."""
+        custom = CostScheme(turbine_coeff=500.0)
+        inputs = parameters_and_constants(cost_level=custom)
+        assert inputs['cost_level'] is custom
+
+    def test_otexconfig_accepts_cost_scheme(self):
+        """OTEXConfig should accept a CostScheme as economics.cost_level."""
+        custom = replace(HIGH_COST, opex_fraction=0.06)
+        config = OTEXConfig(economics=Economics(cost_level=custom))
+        legacy = config.to_legacy_dict()
+        assert legacy['rho_pipe'] == pytest.approx(HIGH_COST.pipe_density)
 
 
 class TestEconomicInputs:

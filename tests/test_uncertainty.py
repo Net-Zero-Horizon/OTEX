@@ -519,3 +519,252 @@ class TestSobolAnalysis:
         # S1 should sum to ~1 (or less with interactions)
         # ST should be >= S1
         assert np.all(results.ST >= results.S1 - 0.01)  # Allow small numerical error
+
+
+# ---------------------------------------------------------------------------
+# Export tests
+# ---------------------------------------------------------------------------
+
+class TestExportModule:
+    """Tests for otex.analysis.export functions."""
+
+    @pytest.fixture
+    def mc_results(self):
+        """Minimal UncertaintyResults for export tests."""
+        rng = np.random.default_rng(0)
+        n, p = 50, 3
+        samples = rng.uniform(0.8, 1.2, (n, p))
+        lcoe = 10 + rng.normal(0, 2, n)
+        lcoe[5] = np.nan   # simulate one invalid run
+
+        params = [
+            UncertainParameter('capex_turbine_factor', 1.0, 'uniform', (0.8, 1.5), 'economic'),
+            UncertainParameter('discount_rate',         0.10, 'uniform', (0.05, 0.15), 'economic'),
+            UncertainParameter('U_evap',                4.5,  'uniform', (4.05, 4.95), 'thermodynamic'),
+        ]
+        config = UncertaintyConfig(parameters=params, n_samples=n, seed=0)
+
+        return UncertaintyResults(
+            samples=samples,
+            lcoe=lcoe,
+            net_power=rng.uniform(-120000, -100000, n),
+            capex=rng.uniform(4e8, 6e8, n),
+            opex=rng.uniform(1.2e7, 1.8e7, n),
+            parameter_names=[p.name for p in params],
+            config=config,
+        )
+
+    @pytest.fixture
+    def tornado_results(self):
+        """Minimal TornadoResults for export tests."""
+        from otex.analysis.sensitivity import TornadoResults
+        return TornadoResults(
+            parameter_names=['discount_rate', 'capex_turbine_factor'],
+            low_values=np.array([8.0, 11.0]),
+            high_values=np.array([18.0, 14.0]),
+            baseline=12.5,
+            output_name='lcoe',
+        )
+
+    @pytest.fixture
+    def sobol_results(self):
+        """Minimal SobolResults for export tests."""
+        from otex.analysis.sensitivity import SobolResults
+        return SobolResults(
+            S1=np.array([0.30, 0.15, 0.05]),
+            ST=np.array([0.35, 0.20, 0.08]),
+            S1_conf=np.array([0.02, 0.01, 0.005]),
+            ST_conf=np.array([0.03, 0.02, 0.008]),
+            parameter_names=['discount_rate', 'capex_turbine_factor', 'U_evap'],
+            output_name='lcoe',
+        )
+
+    # --- make_samples_df ---
+
+    def test_samples_df_shape(self, mc_results):
+        from otex.analysis.export import make_samples_df
+        df = make_samples_df(mc_results)
+        assert df.shape[0] == 50
+        # columns: sample_id + 3 params + lcoe + net_power + capex + opex + valid
+        assert df.shape[1] == 1 + 3 + 5
+
+    def test_samples_df_columns(self, mc_results):
+        from otex.analysis.export import make_samples_df
+        df = make_samples_df(mc_results)
+        assert 'sample_id' in df.columns
+        assert 'lcoe' in df.columns
+        assert 'valid' in df.columns
+        assert 'capex_turbine_factor' in df.columns
+
+    def test_samples_df_valid_column(self, mc_results):
+        from otex.analysis.export import make_samples_df
+        df = make_samples_df(mc_results)
+        # One NaN was injected at index 5
+        assert df['valid'].sum() == 49
+        assert not df.loc[5, 'valid']
+
+    # --- make_statistics_df ---
+
+    def test_statistics_df_outputs(self, mc_results):
+        from otex.analysis.export import make_statistics_df
+        df = make_statistics_df(mc_results)
+        assert set(['lcoe', 'net_power', 'capex', 'opex']).issubset(set(df['output']))
+
+    def test_statistics_df_has_skewness(self, mc_results):
+        from otex.analysis.export import make_statistics_df
+        df = make_statistics_df(mc_results)
+        assert 'skewness' in df.columns
+        assert 'kurtosis' in df.columns
+
+    def test_statistics_df_has_p10_p90(self, mc_results):
+        from otex.analysis.export import make_statistics_df
+        df = make_statistics_df(mc_results)
+        assert 'p10' in df.columns
+        assert 'p90' in df.columns
+
+    def test_statistics_df_n_valid(self, mc_results):
+        from otex.analysis.export import make_statistics_df
+        df = make_statistics_df(mc_results)
+        lcoe_row = df[df['output'] == 'lcoe'].iloc[0]
+        assert lcoe_row['n_valid'] == 49
+        assert lcoe_row['n_invalid'] == 1
+
+    # --- make_correlations_df ---
+
+    def test_correlations_df_shape(self, mc_results):
+        from otex.analysis.export import make_correlations_df
+        df = make_correlations_df(mc_results)
+        assert len(df) == 3  # one row per parameter
+
+    def test_correlations_df_has_rho_columns(self, mc_results):
+        from otex.analysis.export import make_correlations_df
+        df = make_correlations_df(mc_results)
+        assert 'lcoe_rho' in df.columns
+        assert 'lcoe_pvalue' in df.columns
+        assert 'net_power_rho' in df.columns
+
+    def test_correlations_df_rho_range(self, mc_results):
+        from otex.analysis.export import make_correlations_df
+        df = make_correlations_df(mc_results)
+        rho = df['lcoe_rho'].dropna()
+        assert (rho.abs() <= 1.0).all()
+
+    def test_correlations_df_has_rank(self, mc_results):
+        from otex.analysis.export import make_correlations_df
+        df = make_correlations_df(mc_results)
+        assert 'lcoe_rank' in df.columns
+        assert df['lcoe_rank'].min() == 1
+
+    # --- make_parameters_df ---
+
+    def test_parameters_df(self, mc_results):
+        from otex.analysis.export import make_parameters_df
+        df = make_parameters_df(mc_results.config)
+        assert len(df) == 3
+        assert 'nominal' in df.columns
+        assert 'distribution' in df.columns
+        assert 'category' in df.columns
+
+    # --- make_tornado_df ---
+
+    def test_tornado_df_shape(self, tornado_results, mc_results):
+        from otex.analysis.export import make_tornado_df
+        df = make_tornado_df(tornado_results, config=mc_results.config)
+        assert len(df) == 2
+
+    def test_tornado_df_rank(self, tornado_results):
+        from otex.analysis.export import make_tornado_df
+        df = make_tornado_df(tornado_results)
+        assert df.iloc[0]['rank'] == 1
+        # discount_rate has swing 10, capex_turbine_factor has swing 3
+        assert df.iloc[0]['parameter'] == 'discount_rate'
+
+    def test_tornado_df_swing_pct(self, tornado_results):
+        from otex.analysis.export import make_tornado_df
+        df = make_tornado_df(tornado_results)
+        assert 'swing_pct' in df.columns
+        pct = df.iloc[0]['swing_pct']
+        expected = (18.0 - 8.0) / abs(12.5) * 100
+        assert abs(pct - expected) < 0.01
+
+    # --- make_sobol_df ---
+
+    def test_sobol_df_shape(self, sobol_results):
+        from otex.analysis.export import make_sobol_df
+        df = make_sobol_df(sobol_results)
+        assert len(df) == 3
+
+    def test_sobol_df_ranked_by_ST(self, sobol_results):
+        from otex.analysis.export import make_sobol_df
+        df = make_sobol_df(sobol_results)
+        assert df.iloc[0]['ST_rank'] == 1
+        assert df.iloc[0]['parameter'] == 'discount_rate'
+
+    def test_sobol_df_interactions(self, sobol_results):
+        from otex.analysis.export import make_sobol_df
+        df = make_sobol_df(sobol_results)
+        for _, row in df.iterrows():
+            assert row['interactions'] == pytest.approx(row['ST'] - row['S1'])
+
+    # --- to_dataframe() on result classes ---
+
+    def test_uncertainty_results_to_dataframe(self, mc_results):
+        df = mc_results.to_dataframe()
+        assert hasattr(df, 'columns')
+        assert 'lcoe' in df.columns
+
+    def test_tornado_results_to_dataframe(self, tornado_results, mc_results):
+        df = tornado_results.to_dataframe(config=mc_results.config)
+        assert 'swing_abs' in df.columns
+
+    def test_sobol_results_to_dataframe(self, sobol_results, mc_results):
+        df = sobol_results.to_dataframe(config=mc_results.config)
+        assert 'ST' in df.columns
+
+    # --- compute_statistics() skewness/kurtosis/p10/p90 ---
+
+    def test_compute_statistics_extended(self, mc_results):
+        stats = mc_results.compute_statistics()
+        assert 'lcoe_skewness' in stats['lcoe']
+        assert 'lcoe_kurtosis' in stats['lcoe']
+        assert 'lcoe_p10' in stats['lcoe']
+        assert 'lcoe_p90' in stats['lcoe']
+
+    # --- export_analysis() end-to-end ---
+
+    def test_export_analysis_creates_files(self, mc_results, tornado_results, sobol_results, tmp_path):
+        from otex.analysis.export import export_analysis
+        export_analysis(
+            output_dir=tmp_path,
+            mc_results=mc_results,
+            tornado_results=tornado_results,
+            sobol_results=sobol_results,
+            metadata={'T_WW': 28.0, 'T_CW': 5.0},
+        )
+        expected = ['metadata.json', 'samples.csv', 'statistics.csv',
+                    'correlations.csv', 'parameters.csv', 'tornado.csv', 'sobol.csv']
+        for fname in expected:
+            assert (tmp_path / fname).exists(), f"Missing: {fname}"
+
+    def test_export_analysis_samples_csv_readable(self, mc_results, tmp_path):
+        import pandas as pd
+        from otex.analysis.export import export_analysis
+        export_analysis(tmp_path, mc_results=mc_results)
+        df = pd.read_csv(tmp_path / 'samples.csv')
+        assert len(df) == 50
+        assert 'lcoe' in df.columns
+
+    def test_export_analysis_metadata_json(self, mc_results, tmp_path):
+        import json
+        from otex.analysis.export import export_analysis
+        export_analysis(tmp_path, mc_results=mc_results, metadata={'T_WW': 28.0})
+        with open(tmp_path / 'metadata.json') as f:
+            meta = json.load(f)
+        assert meta['T_WW'] == 28.0
+        assert 'monte_carlo' in meta
+        assert 'timestamp' in meta
+
+    def test_export_analysis_raises_without_results(self, tmp_path):
+        from otex.analysis.export import export_analysis
+        with pytest.raises(ValueError, match='At least one'):
+            export_analysis(tmp_path)

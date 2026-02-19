@@ -123,7 +123,56 @@ print(f"  Mooring: ${costs_dict['mooring_CAPEX']/1e6:,.1f} M")
 print(f"  Cables: ${costs_dict['cable_CAPEX']/1e6:,.1f} M")
 ```
 
-## 5. Quick Uncertainty Analysis
+## 5. Custom Cost Schemes
+
+By default OTEX ships two built-in cost scenarios: `'low_cost'` and `'high_cost'`. You can also create fully custom schemes or derive one from an existing scenario using Python's `dataclasses.replace()`.
+
+```python
+from otex.economics import CostScheme, LOW_COST, HIGH_COST
+from dataclasses import replace
+
+# ── Option A: derive from an existing scheme ─────────────────────────────────
+# Adjust turbine cost and OPEX rate, keep everything else from LOW_COST
+my_scheme = replace(
+    LOW_COST,
+    turbine_coeff=400,      # $/kW (default 328)
+    opex_fraction=0.04,     # 4% of CAPEX/yr (default 3%)
+)
+
+# ── Option B: build from scratch ─────────────────────────────────────────────
+# Only specify what differs — unset fields use LOW_COST defaults
+custom = CostScheme(
+    turbine_coeff=380,
+    hx_coeff=260,
+    pipes_coeff=12.0,
+    capex_extra_fraction=0.08,
+    opex_fraction=0.035,
+    pipe_density=1010.0,    # kg/m³ — affects pipe mass calculation
+)
+
+# ── Use anywhere cost_level is accepted ──────────────────────────────────────
+from otex.config import parameters_and_constants
+from otex.economics import capex_opex_lcoe
+
+inputs = parameters_and_constants(p_gross=-50000, cost_level=my_scheme)
+costs_dict, capex_total, opex, lcoe = capex_opex_lcoe(plant, inputs, my_scheme)
+print(f"Custom LCOE: {lcoe[0]:.2f} ct/kWh")
+```
+
+The built-in schemes differ primarily in their reference coefficients and contingency rates:
+
+| Parameter | `LOW_COST` | `HIGH_COST` |
+|-----------|-----------|------------|
+| `turbine_coeff` [$/kW] | 328 | 512 |
+| `hx_coeff` [$/m²] | 226 | 916 |
+| `pipes_coeff` [$/kg] | 9.0 | 30.1 |
+| `capex_extra_fraction` | 5 % | 20 % |
+| `opex_fraction` | 3 %/yr | 5 %/yr |
+| Pipe material | HDPE (995 kg/m³) | FRP (1016 kg/m³) |
+
+See [`otex.economics.CostScheme`](../api/README.md#costscheme) for a full list of fields.
+
+## 6. Quick Uncertainty Analysis
 
 Assess uncertainty in LCOE estimates:
 
@@ -161,7 +210,7 @@ print(f"Max:    {lcoe['lcoe_max']:.2f} ct/kWh")
 print(f"90% CI: [{lcoe['lcoe_p5']:.2f}, {lcoe['lcoe_p95']:.2f}] ct/kWh")
 ```
 
-## 6. Sensitivity Analysis
+## 7. Sensitivity Analysis
 
 Identify most influential parameters:
 
@@ -196,7 +245,7 @@ capex_HX_factor                          +2.41 ct/kWh
 opex_factor                              +2.13 ct/kWh
 ```
 
-## 7. Visualization
+## 8. Visualization
 
 ```python
 import matplotlib.pyplot as plt
@@ -227,11 +276,13 @@ plt.show()
 1. **Configuration**: Use `parameters_and_constants()` to set up plant parameters
 2. **Sizing**: Use `otec_sizing()` to calculate component sizes and flows
 3. **Economics**: Use `capex_opex_lcoe()` to get costs and LCOE
-4. **Uncertainty**: Use `MonteCarloAnalysis` for probabilistic assessment
-5. **Sensitivity**: Use `TornadoAnalysis` to identify key parameters
+4. **Cost schemes**: Pass `'low_cost'`, `'high_cost'`, or a custom `CostScheme` to any function that accepts `cost_level`
+5. **Uncertainty**: Use `MonteCarloAnalysis` for probabilistic assessment
+6. **Sensitivity**: Use `TornadoAnalysis` to identify key parameters
 
 Remember:
 - LCOE typically ranges from 15-40 ct/kWh depending on conditions
 - Discount rate is usually the most influential economic parameter
 - Temperature difference (ΔT) strongly affects plant efficiency
 - Larger plants have better economies of scale
+- `dataclasses.replace(LOW_COST, ...)` is the quickest way to explore cost sensitivity

@@ -237,9 +237,27 @@ OTEX/
 |-----------|---------|---------|
 | `cycle_type` | `rankine_closed`, `rankine_open`, `rankine_hybrid`, `kalina`, `uehara` | `rankine_closed` |
 | `fluid_type` | `ammonia`, `r134a`, `r245fa`, `propane`, `isobutane` | `ammonia` |
-| `cost_level` | `low_cost`, `high_cost` | `low_cost` |
+| `cost_level` | `'low_cost'`, `'high_cost'`, or a `CostScheme` object | `'low_cost'` |
 | `p_gross` | Any negative value (kW) | `-136000` |
 | `year` | 1993-2023 | `2020` |
+
+### Custom Cost Schemes
+
+Beyond the two built-in scenarios you can define your own cost parameters with `CostScheme` and Python's standard `dataclasses.replace()`:
+
+```python
+from otex.economics import CostScheme, LOW_COST
+from dataclasses import replace
+
+# Modify specific parameters of an existing scheme
+my_scheme = replace(LOW_COST, turbine_coeff=400, opex_fraction=0.04)
+
+# Use it everywhere cost_level is accepted
+inputs = parameters_and_constants(p_gross=-100000, cost_level=my_scheme)
+costs, capex, opex, lcoe = capex_opex_lcoe(plant, inputs, my_scheme)
+```
+
+All existing code that uses `cost_level='low_cost'` or `cost_level='high_cost'` continues to work unchanged.
 
 ## Requirements
 
