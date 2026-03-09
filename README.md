@@ -280,17 +280,7 @@ OTEX builds upon [pyOTEC](https://github.com/JKALanger/pyOTEC) by Langer et al. 
 
 If you use OTEX in your research, please cite:
 
-```bibtex
-@software{otex2024,
-  author = {Soto-Calvo, Manuel and OTEX Development Team},
-  title = {OTEX: Ocean Thermal Energy eXchange},
-  year = {2024},
-  publisher = {GitHub},
-  url = {https://github.com/msotocalvo/OTEX},
-  doi = {10.5281/zenodo.18428742}
-}
-```
-## Studies usign OTEX:
+
 - Soto Calvo M, and Lee HS., 2025. Ocean Thermal Energy Conversion (OTEC) Potential in Central American and Caribbean Regions: A Multicriteria Analysis for Optimal Sites. Applied Energy. 394: 126182. https://doi.org/10.1016/j.apenergy.2025.126182
 
 ## Contributing
@@ -303,7 +293,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-<p align="center">
-  Made with ❤️ for ocean energy research
-</p>
+
 
