@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="img/logo.png" alt="OTEX Logo" width="400"/>
+  <img src="https://github.com/Net-Zero-Horizon/OTEX/blob/b553a7753a20db5f05e0a08e46eeedafdbf2e549/img/logo.png" alt="OTEX Logo" width="400"/>
 </p>
 
 <h1 align="center">OTEX - Ocean Thermal Energy eXchange</h1>
