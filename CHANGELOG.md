@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- HYCOM data source support (`otex.data.hycom`)
+  - Download ocean temperature data via OPeNDAP (no authentication required)
+  - Reanalysis (GLBv0.08/expt_53.X, 1994–2015) and analysis (GLBy0.08/expt_93.0, 2019–2024) experiments
+  - 40 standard depth levels, 0.08° spatial resolution
+  - Automatic experiment selection based on year
+  - CMEMS-compatible NetCDF output (drop-in replacement)
+  - `data_source='HYCOM'` parameter in `run_regional_analysis()`
 - Uncertainty analysis module (`otex.analysis`)
   - Monte Carlo analysis with Latin Hypercube Sampling
   - Sobol global sensitivity analysis (requires SALib)

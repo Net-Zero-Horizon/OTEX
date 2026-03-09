@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 from otex.config import parameters_and_constants
-from otex.data.cmems import download_data, data_processing, load_temperatures
+from otex.data.cmems import data_processing, load_temperatures
 from otex.data.resources import load_sites
 from otex.plant.off_design_analysis import off_design_analysis
 
@@ -44,11 +44,12 @@ def run_regional_analysis(
     fluid_type='ammonia',
     use_coolprop=True,
     output_dir=None,
+    data_source='CMEMS',
 ):
     """
     Run regional OTEC analysis for a specified region.
 
-    Downloads CMEMS oceanographic data (if not cached), sizes OTEC plants
+    Downloads oceanographic data (if not cached), sizes OTEC plants
     at each feasible site, performs off-design analysis, and calculates
     LCOE for the entire region.
 
@@ -65,6 +66,7 @@ def run_regional_analysis(
             ``'r245fa'``, ``'propane'``, ``'isobutane'``.
         use_coolprop: Whether to use CoolProp for fluid properties (default True).
         output_dir: Directory for results. Defaults to ``./Data_Results/``.
+        data_source: Data source, ``'CMEMS'`` or ``'HYCOM'`` (default ``'CMEMS'``).
 
     Returns:
         tuple: ``(otec_plants, sites_df)`` where ``otec_plants`` is a dict
@@ -79,7 +81,7 @@ def run_regional_analysis(
     inputs = parameters_and_constants(
         p_gross=p_gross,
         cost_level=cost_level,
-        data='CMEMS',
+        data=data_source,
         fluid_type=fluid_type,
         cycle_type=cycle_type,
         use_coolprop=use_coolprop,
@@ -96,6 +98,11 @@ def run_regional_analysis(
 
     depth_WW = inputs['length_WW_inlet']
     depth_CW = inputs['length_CW_inlet']
+
+    if inputs['data'] == 'HYCOM':
+        from otex.data.hycom import download_data
+    else:
+        from otex.data.cmems import download_data
 
     files = download_data(cost_level, inputs, studied_region, region_dir + os.sep)
 
@@ -186,6 +193,7 @@ Examples:
   otex-regional Philippines
   otex-regional Philippines --power -136000 --year 2021
   otex-regional Jamaica --cycle kalina --cost high_cost
+  otex-regional Jamaica --data-source HYCOM --year 2020
   otex-regional Hawaii --cycle rankine_closed --fluid r134a
         ''',
     )
@@ -204,6 +212,8 @@ Examples:
     parser.add_argument('--fluid', choices=['ammonia', 'r134a', 'r245fa', 'propane', 'isobutane'],
                         default='ammonia',
                         help='Working fluid (default: ammonia)')
+    parser.add_argument('--data-source', '-d', choices=['CMEMS', 'HYCOM'], default='CMEMS',
+                        help='Oceanographic data source (default: CMEMS)')
     parser.add_argument('--no-coolprop', action='store_true',
                         help='Disable CoolProp (use polynomial correlations)')
     parser.add_argument('--output-dir', default=None,
@@ -222,6 +232,7 @@ Examples:
     print(f'Cycle: {args.cycle}')
     print(f'Fluid: {args.fluid}')
     print(f'Cost level: {args.cost}')
+    print(f'Data source: {args.data_source}')
     print(f'CoolProp: {not args.no_coolprop}\n')
 
     run_regional_analysis(
@@ -233,6 +244,7 @@ Examples:
         fluid_type=args.fluid,
         use_coolprop=not args.no_coolprop,
         output_dir=args.output_dir,
+        data_source=args.data_source,
     )
 
 

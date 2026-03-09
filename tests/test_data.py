@@ -175,3 +175,76 @@ class TestCMEMSFunctions:
             if 'copernicusmarine' in str(e):
                 pytest.skip("copernicusmarine not installed")
             raise
+
+
+class TestHYCOMModule:
+    """Tests for HYCOM data module."""
+
+    def test_hycom_module_exists(self):
+        """HYCOM module should be importable."""
+        from otex.data import hycom
+        assert hycom is not None
+
+    def test_hycom_download_data_function_exists(self):
+        """download_data function should exist in HYCOM module."""
+        from otex.data.hycom import download_data
+        assert callable(download_data)
+
+    def test_hycom_depth_levels(self):
+        """HYCOM should have 40 standard depth levels."""
+        from otex.data.hycom import HYCOM_DEPTHS
+        assert len(HYCOM_DEPTHS) == 40
+        assert HYCOM_DEPTHS[0] == 0.0
+        assert HYCOM_DEPTHS[-1] == 5000.0
+
+    def test_get_nearest_hycom_depth_surface(self):
+        """Nearest depth to 22m should be 20m."""
+        from otex.data.hycom import get_nearest_hycom_depth
+        assert get_nearest_hycom_depth(22.0) == 20.0
+
+    def test_get_nearest_hycom_depth_deep(self):
+        """Nearest depth to 1062m should be 1000m."""
+        from otex.data.hycom import get_nearest_hycom_depth
+        assert get_nearest_hycom_depth(1062.0) == 1000.0
+
+    def test_get_nearest_hycom_depth_exact(self):
+        """Exact match should return the same value."""
+        from otex.data.hycom import get_nearest_hycom_depth
+        assert get_nearest_hycom_depth(500.0) == 500.0
+
+    def test_get_nearest_hycom_depth_midpoint(self):
+        """Midpoint between 600 and 700 should return one of them."""
+        from otex.data.hycom import get_nearest_hycom_depth
+        result = get_nearest_hycom_depth(650.0)
+        assert result in (600.0, 700.0)
+
+    def test_get_hycom_experiment_reanalysis(self):
+        """Year 2010 should select reanalysis experiment."""
+        from otex.data.hycom import get_hycom_experiment
+        exp = get_hycom_experiment(2010)
+        assert "expt_53.X" in exp["url"]
+
+    def test_get_hycom_experiment_analysis(self):
+        """Year 2020 should select analysis experiment."""
+        from otex.data.hycom import get_hycom_experiment
+        exp = get_hycom_experiment(2020)
+        assert "expt_93.0" in exp["url"]
+
+    def test_get_hycom_experiment_gap_raises(self):
+        """Year 2017 should raise ValueError (data gap)."""
+        from otex.data.hycom import get_hycom_experiment
+        with pytest.raises(ValueError, match="not available"):
+            get_hycom_experiment(2017)
+
+    def test_hycom_experiments_have_required_keys(self):
+        """Each experiment should have url, years, and time_origin."""
+        from otex.data.hycom import HYCOM_EXPERIMENTS
+        for name, exp in HYCOM_EXPERIMENTS.items():
+            assert "url" in exp, f"{name} missing 'url'"
+            assert "years" in exp, f"{name} missing 'years'"
+            assert "time_origin" in exp, f"{name} missing 'time_origin'"
+
+    def test_lazy_import_download_data_hycom(self):
+        """download_data_hycom should be accessible via lazy import."""
+        from otex.data import download_data_hycom
+        assert callable(download_data_hycom)

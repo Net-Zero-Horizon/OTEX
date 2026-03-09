@@ -202,7 +202,7 @@ class DataConfig:
     cmems_time_origin: str = '1950-01-01 00:00:00'
 
     # HYCOM specific
-    hycom_glb: str = 'GLBu0.08'
+    hycom_glb: str = 'GLBy0.08'
     hycom_horizontal_stride: int = 3
     hycom_time_origin: str = '2000-01-01 00:00:00'
 

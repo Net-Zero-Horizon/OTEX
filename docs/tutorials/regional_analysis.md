@@ -5,14 +5,15 @@ Learn how to analyze OTEC potential for specific geographic regions using real o
 ## Prerequisites
 
 - OTEX installed (`pip install otex`)
-- CMEMS credentials configured (see [Installation Guide](../installation.md#cmems-data-access))
 - Internet connection for data download
+- **HYCOM**: No credentials needed (recommended for getting started)
+- **CMEMS**: Requires free Copernicus Marine account (see [Installation Guide](../installation.md#cmems-data-access))
 
 ## Overview
 
 Regional analysis in OTEX:
 
-1. Downloads temperature profiles from CMEMS for your region
+1. Downloads temperature profiles from CMEMS or HYCOM for your region
 2. Identifies feasible OTEC sites (adequate water depth)
 3. Sizes plants for each site based on local conditions
 4. Calculates LCOE considering distance to shore
@@ -43,8 +44,11 @@ Popular regions include:
 After installing OTEX via pip, the `otex-regional` command is available:
 
 ```bash
-# Analyze Jamaica with default settings (136 MW, low_cost, 2020)
+# Analyze Jamaica with default settings (136 MW, low_cost, 2020, CMEMS)
 otex-regional Jamaica
+
+# Using HYCOM data (no credentials needed)
+otex-regional Jamaica --data-source HYCOM
 
 # Specify plant size and year
 otex-regional Jamaica --power -50000 --year 2021
@@ -58,7 +62,7 @@ otex-regional Philippines --cycle kalina --cost high_cost
 ```python
 from otex.regional import run_regional_analysis
 
-# Run analysis
+# Run analysis with HYCOM (no credentials needed)
 otec_plants, sites_df = run_regional_analysis(
     studied_region='Jamaica',
     p_gross=-50000,          # 50 MW
@@ -66,7 +70,8 @@ otec_plants, sites_df = run_regional_analysis(
     year=2020,
     cycle_type='rankine_closed',
     fluid_type='ammonia',
-    use_coolprop=True
+    use_coolprop=True,
+    data_source='HYCOM',     # or 'CMEMS' (default)
 )
 ```
 
@@ -117,7 +122,7 @@ otec_plants, sites_df = run_regional_analysis(
 ```
 
 This will:
-1. Download CMEMS temperature data (~5-15 minutes first time)
+1. Download temperature data from CMEMS or HYCOM (~5-15 minutes first time)
 2. Process and cache data locally
 3. Run OTEC sizing for all valid sites
 4. Calculate LCOE for each site
@@ -228,6 +233,31 @@ plt.title('Average Daily Net Power Output')
 plt.show()
 ```
 
+## Choosing a Data Source
+
+OTEX supports two oceanographic data sources. Choose based on your needs:
+
+| Feature | CMEMS | HYCOM |
+|---------|-------|-------|
+| Authentication | Required (free account) | Not required |
+| Temporal coverage | 1993–present | 1994–2015, 2019–2024 |
+| Spatial resolution | 0.083° (~9 km) | 0.08° (~9 km) |
+| Depth levels | 50 | 40 |
+| Data gap | None | 2016–2018 |
+
+**Recommendation:** Use HYCOM for quick analyses and getting started. Use CMEMS for years outside HYCOM coverage or when continuous multi-year time series are needed.
+
+```python
+# Compare results from both sources
+otec_hycom, sites_hycom = run_regional_analysis(
+    studied_region='Jamaica', year=2020, data_source='HYCOM'
+)
+
+otec_cmems, sites_cmems = run_regional_analysis(
+    studied_region='Jamaica', year=2020, data_source='CMEMS'
+)
+```
+
 ## Advanced Options
 
 ### Custom Plant Size
@@ -323,9 +353,16 @@ Sites need water depth of at least 600-1000m.
 
 ### Download failures
 
-1. Verify CMEMS credentials: `copernicusmarine login --check`
+**CMEMS:**
+1. Verify credentials: `copernicusmarine login --check`
 2. Check internet connection
 3. Try again later (CMEMS servers may be busy)
+4. Try HYCOM as an alternative: `data_source='HYCOM'`
+
+**HYCOM:**
+1. Verify the year is within coverage (1994–2015 or 2019–2024)
+2. HYCOM OPeNDAP servers may be temporarily unavailable — retry later
+3. Check internet connection
 
 ### Memory errors
 

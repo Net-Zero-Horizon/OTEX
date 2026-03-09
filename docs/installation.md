@@ -118,9 +118,36 @@ pip install -e ".[dev,all]"
 pytest tests/ -v
 ```
 
-## CMEMS Data Access
+## Oceanographic Data Access
 
-OTEX uses oceanographic data from Copernicus Marine Environment Monitoring Service (CMEMS). To download data, you need to configure access credentials.
+OTEX supports two oceanographic data sources: **CMEMS** (Copernicus Marine) and **HYCOM** (Hybrid Coordinate Ocean Model).
+
+### HYCOM Data Access (No Authentication)
+
+HYCOM data is freely available via OPeNDAP with no account required. This is the easiest way to get started:
+
+```python
+from otex.regional import run_regional_analysis
+
+otec_plants, sites = run_regional_analysis(
+    studied_region='Jamaica',
+    data_source='HYCOM',
+    year=2020,
+)
+```
+
+**Available HYCOM datasets:**
+
+| Dataset | Period | Description |
+|---------|--------|-------------|
+| GLBv0.08/expt_53.X | 1994–2015 | Reanalysis |
+| GLBy0.08/expt_93.0 | 2019–2024 | Analysis |
+
+> **Note:** HYCOM data is not available for 2016–2018 (gap between experiments). Use CMEMS for those years.
+
+### CMEMS Data Access
+
+CMEMS provides a longer continuous time series (1993–present) but requires a free Copernicus Marine account.
 
 ### Step 1: Create Account
 
@@ -169,7 +196,7 @@ from otex.data.cmems import download_data
 
 ### Data Storage
 
-Downloaded data is cached locally in the `Data_Results/` directory:
+Downloaded data is cached locally in the `Data_Results/` directory. Both CMEMS and HYCOM downloads use the same directory structure and CMEMS-compatible file format:
 
 ```
 Data_Results/
@@ -178,7 +205,7 @@ Data_Results/
 │   │   ├── T_22.0m_2020_Jamaica.h5      # Warm water temperatures
 │   │   ├── T_1062.0m_2020_Jamaica.h5    # Cold water temperatures
 │   │   └── OTEC_sites_Jamaica_*.csv     # Results
-│   └── raw_netcdf/                       # Original downloads
+│   └── T_*m_2020_Jamaica_*.nc           # Raw NetCDF downloads
 ├── Philippines/
 └── ...
 ```
@@ -280,6 +307,17 @@ pip install --force-reinstall h5py netCDF4
    ```bash
    copernicusmarine describe --contains GLOBAL_MULTIYEAR_PHY
    ```
+
+4. **Alternative:** Try HYCOM instead (no credentials needed):
+   ```python
+   run_regional_analysis(studied_region='Jamaica', data_source='HYCOM', year=2020)
+   ```
+
+#### HYCOM Download Errors
+
+1. HYCOM OPeNDAP servers may be temporarily unavailable — retry after a few minutes
+2. Verify the year falls within available ranges (1994–2015 or 2019–2024)
+3. Check internet connection (HYCOM uses port 443 via HTTPS)
 
 #### Memory Errors
 

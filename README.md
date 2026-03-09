@@ -58,7 +58,7 @@
 OTEX enables researchers and engineers to:
 
 - **Design OTEC plants** with multiple thermodynamic cycles and working fluids
-- **Analyze regional and global potential** using CMEMS oceanographic data
+- **Analyze regional and global potential** using CMEMS or HYCOM oceanographic data
 - **Perform uncertainty analysis** with Monte Carlo simulations and sensitivity studies
 - **Compare scenarios** across different locations, plant sizes, and configurations
 
@@ -79,6 +79,13 @@ OTEX enables researchers and engineers to:
 - **R245fa** - Requires CoolProp
 - **Propane** - Requires CoolProp
 - **Isobutane** - Requires CoolProp
+
+### Data Sources
+
+| Source | Resolution | Depth Levels | Period | Authentication |
+|--------|-----------|-------------|--------|----------------|
+| [CMEMS](https://data.marine.copernicus.eu/) | 0.083° | 50 | 1993–present | Required (free account) |
+| [HYCOM](https://www.hycom.org/) | 0.08° | 40 | 1994–2015, 2019–2024 | Not required |
 
 ### Analysis Capabilities
 - **Regional Analysis**: Site-specific LCOE maps and power profiles
@@ -115,9 +122,21 @@ cd OTEX
 pip install -e ".[dev]"
 ```
 
-### CMEMS Data Access
+### Oceanographic Data Access
 
-For downloading oceanographic data, you need Copernicus Marine credentials:
+**HYCOM (no credentials needed):**
+
+```python
+from otex.regional import run_regional_analysis
+
+otec_plants, sites = run_regional_analysis(
+    studied_region='Jamaica',
+    data_source='HYCOM',
+    year=2020,
+)
+```
+
+**CMEMS (requires free account):**
 
 1. Create account at [Copernicus Marine](https://data.marine.copernicus.eu/)
 2. Configure credentials:
@@ -151,11 +170,14 @@ print(f"Plant lifetime: {inputs['lifetime']} years")
 ### Regional Analysis
 
 ```bash
-# Analyze Cuba for 2020 with a 50 MW plant
-python scripts/regional_analysis.py Cuba --year 2020 --power -50000
+# Analyze Cuba for 2020 with a 50 MW plant (CMEMS, default)
+otex-regional Cuba --year 2020 --power -50000
+
+# Using HYCOM data (no credentials needed)
+otex-regional Philippines --year 2020 --data-source HYCOM
 
 # Analyze with Kalina cycle
-python scripts/regional_analysis.py Philippines --cycle kalina --year 2021
+otex-regional Philippines --cycle kalina --year 2021
 ```
 
 ### Uncertainty Analysis
@@ -220,7 +242,7 @@ OTEX/
 │   ├── plant/              # Plant sizing and operation
 │   ├── economics/          # Cost models and LCOE
 │   ├── analysis/           # Uncertainty and sensitivity
-│   ├── data/               # Data loading (CMEMS, NetCDF)
+│   ├── data/               # Data loading (CMEMS, HYCOM, NetCDF)
 │   └── config.py           # Configuration management
 ├── scripts/                 # CLI scripts
 │   ├── regional_analysis.py
@@ -239,7 +261,8 @@ OTEX/
 | `fluid_type` | `ammonia`, `r134a`, `r245fa`, `propane`, `isobutane` | `ammonia` |
 | `cost_level` | `'low_cost'`, `'high_cost'`, or a `CostScheme` object | `'low_cost'` |
 | `p_gross` | Any negative value (kW) | `-136000` |
-| `year` | 1993-2023 | `2020` |
+| `data_source` | `'CMEMS'`, `'HYCOM'` | `'CMEMS'` |
+| `year` | 1993–present (CMEMS), 1994–2015 / 2019–2024 (HYCOM) | `2020` |
 
 ### Custom Cost Schemes
 
@@ -292,6 +315,4 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
-
-
 
