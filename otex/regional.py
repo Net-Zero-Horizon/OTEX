@@ -116,6 +116,32 @@ def run_regional_analysis(
     ]
     sites_df = sites_df.sort_values(by=['longitude', 'latitude'], ascending=True)
 
+    # Siting layers: protected areas (hard exclusion), AIS density (hard above
+    # P95, soft penalty below), seismic + cyclone hazards (cost multipliers
+    # applied later in economics/costs.py).
+    siting_active = (
+        inputs.get('siting_enable_mpa_filter')
+        or inputs.get('siting_enable_ais_filter')
+        or inputs.get('siting_enable_hazard_costs')
+    )
+    if siting_active:
+        from otex.data.siting import enrich_sites
+        sites_df = enrich_sites(
+            sites_df,
+            mpa_buffer_km=inputs.get('siting_mpa_buffer_km', 5.0),
+            ais_buffer_km=inputs.get('siting_ais_buffer_km', 5.0),
+            cache_dir=inputs.get('siting_cache_dir'),
+            refresh=inputs.get('siting_refresh', False),
+        )
+        n0 = len(sites_df)
+        if inputs.get('siting_enable_mpa_filter'):
+            sites_df = sites_df[~sites_df['in_mpa_strict']]
+        if inputs.get('siting_enable_ais_filter'):
+            sites_df = sites_df[
+                sites_df['ais_density_pct'] < inputs.get('siting_ais_exclusion_pct', 95.0)
+            ]
+        print(f'  [siting] retained {len(sites_df)}/{n0} sites after exclusions.')
+
     h5_file_WW = os.path.join(
         run_dir, f'T_{round(depth_WW, 0)}m_{year_str}_{studied_region}.h5'.replace(" ", "_")
     )
@@ -138,6 +164,24 @@ def run_regional_analysis(
         T_WW_profiles, T_WW_design, coordinates_WW, id_sites, timestamp, inputs, nan_columns_WW = data_processing(
             files[:len(files) // 2], sites_df, inputs, studied_region, run_dir + os.sep, 'WW', nan_columns_CW
         )
+
+    # Stuff per-site siting attributes into inputs aligned with id_sites so
+    # economics/costs.py can apply hazard multipliers. Always populated (zeros
+    # when siting is disabled) to keep the cost path uniform.
+    ids_flat = np.squeeze(id_sites).astype(np.int64).ravel()
+    if siting_active and len(ids_flat):
+        attr_lookup = sites_df.set_index('id')
+        def _col(name):
+            if name in attr_lookup.columns:
+                return attr_lookup.loc[ids_flat, name].to_numpy(dtype=np.float64).reshape(1, -1)
+            return np.zeros((1, len(ids_flat)), dtype=np.float64)
+        inputs['ais_density_pct'] = _col('ais_density_pct')
+        inputs['pga_475'] = _col('pga_475')
+        inputs['cyclone_freq_per_yr'] = _col('cyclone_freq_per_yr')
+    else:
+        inputs['ais_density_pct'] = np.zeros((1, len(ids_flat)), dtype=np.float64)
+        inputs['pga_475'] = np.zeros((1, len(ids_flat)), dtype=np.float64)
+        inputs['cyclone_freq_per_yr'] = np.zeros((1, len(ids_flat)), dtype=np.float64)
 
     otec_plants, capex_opex_comparison = off_design_analysis(
         T_WW_design, T_CW_design, T_WW_profiles, T_CW_profiles,

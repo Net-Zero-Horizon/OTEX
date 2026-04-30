@@ -70,6 +70,28 @@ def capex_opex_lcoe(otec_plant_nom,inputs,cost_level='low_cost'):
     deploy_factor = inputs.get('capex_deploy_factor', 1.0)
     opex_factor = inputs.get('opex_factor', 1.0)
 
+    # Siting-based risk multipliers (default = 1.0 if not provided / disabled).
+    # AIS density penalizes BOTH CAPEX and OPEX, proportional to its percentile.
+    # Seismic hazard (PGA) penalizes CAPEX only (structural design margins).
+    # Cyclone frequency penalizes OPEX only (insurance + downtime).
+    ais_pct = np.asarray(inputs.get('ais_density_pct', 0.0), dtype=np.float64)
+    pga_g   = np.asarray(inputs.get('pga_475', 0.0), dtype=np.float64)
+    cyc_yr  = np.asarray(inputs.get('cyclone_freq_per_yr', 0.0), dtype=np.float64)
+
+    w_ais       = inputs.get('siting_w_ais', 0.0)
+    w_seismic   = inputs.get('siting_w_seismic', 0.0)
+    w_cyclone   = inputs.get('siting_w_cyclone', 0.0)
+    pga_ref     = max(inputs.get('siting_pga_ref_g', 0.4), 1e-9)
+    cyc_ref     = max(inputs.get('siting_cyclone_ref_per_yr', 0.5), 1e-9)
+    ais_norm_pct = max(inputs.get('siting_ais_exclusion_pct', 95.0), 1e-9)
+
+    ais_norm = np.clip(np.nan_to_num(ais_pct) / ais_norm_pct, 0.0, 1.0)
+    pga_norm = np.clip(np.nan_to_num(pga_g) / pga_ref, 0.0, 1.0)
+    cyc_norm = np.clip(np.nan_to_num(cyc_yr) / cyc_ref, 0.0, 1.0)
+
+    capex_risk_mult = 1.0 + w_ais * ais_norm + w_seismic * pga_norm
+    opex_risk_mult  = 1.0 + w_ais * ais_norm + w_cyclone * cyc_norm
+
     scheme = get_cost_scheme(cost_level)
 
     capex_turbine   = scheme.turbine_coeff   * (scheme.turbine_ref_power   / -p_gross)      ** scheme.turbine_exp   * turbine_factor
@@ -186,9 +208,14 @@ def capex_opex_lcoe(otec_plant_nom,inputs,cost_level='low_cost'):
     CAPEX_wo_extra = CAPEX_turbine + CAPEX_evap + CAPEX_cond + CAPEX_pump + CAPEX_pipes + CAPEX_cable + CAPEX_structure + CAPEX_deploy + CAPEX_man + CAPEX_intake_outfall
     CAPEX_extra = CAPEX_wo_extra*capex_extra
 
-    CAPEX_total = CAPEX_wo_extra+CAPEX_extra
+    CAPEX_total_base = CAPEX_wo_extra+CAPEX_extra
 
-    OPEX = CAPEX_total*opex
+    # Apply siting-based risk multipliers. The AIS contribution is shared by
+    # both factors, while seismic affects only CAPEX and cyclone only OPEX.
+    # Both multipliers operate on the SAME pre-hazard base to avoid
+    # double-counting the AIS penalty through OPEX = fraction * CAPEX.
+    CAPEX_total = CAPEX_total_base * capex_risk_mult
+    OPEX = CAPEX_total_base * opex * opex_risk_mult
 
     LCOE_nom = (CAPEX_total*inputs['crf']+OPEX)*100/(-p_net*inputs['availability_factor']*8760) # LCOE in ct/kWh 
     

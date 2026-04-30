@@ -12,6 +12,7 @@ Complete documentation of OTEX public API.
 | [`otex.economics`](#otexeconomics) | Cost analysis and LCOE |
 | [`otex.analysis`](#otexanalysis) | Uncertainty and sensitivity |
 | [`otex.data`](#otexdata) | Data loading and processing |
+| [`otex.data.siting`](#otexdatasiting) | Protected areas, shipping lanes, and natural hazards |
 
 ---
 
@@ -569,6 +570,61 @@ def load_temperatures(
 ```
 
 Load cached temperature data from HDF5 file.
+
+---
+
+## otex.data.siting
+
+Site-screening layers: protected areas, shipping lanes, seismic and cyclone
+hazards. See the [Siting tutorial](../tutorials/siting.md) for the full
+narrative.
+
+### `enrich_sites`
+
+```python
+def enrich_sites(
+    sites_df: pd.DataFrame,
+    *,
+    mpa_buffer_km: float = 5.0,
+    ais_buffer_km: float = 5.0,
+    cache_dir: Optional[str] = None,
+    refresh: bool = False,
+    layers: Optional[List[str]] = None,
+) -> pd.DataFrame
+```
+
+Append per-site siting columns: `in_mpa_strict`, `ais_density_pct`,
+`pga_475`, `cyclone_freq_per_yr`. Sites for which a layer is unavailable
+or out of footprint receive the neutral default (`False` / `0.0`), so the
+returned DataFrame always has all four columns.
+
+**Parameters:**
+- `sites_df`: must contain `longitude` and `latitude` columns (EPSG:4326)
+- `mpa_buffer_km`: buffer applied to MPA polygons before the point-in-polygon test
+- `ais_buffer_km`: window radius for AIS density sampling
+- `cache_dir`: override the default `~/.otex/siting_cache/`
+- `refresh`: force re-download even if a layer is cached
+- `layers`: subset from `{"wdpa", "ais", "pga", "ibtracs"}` (default: all)
+
+### `ensure_layers`
+
+```python
+def ensure_layers(
+    layers: Optional[List[str]] = None,
+    cache_dir: Optional[str] = None,
+    refresh: bool = False,
+) -> Dict[str, Path]
+```
+
+Make sure each requested layer is on disk; download if missing. Returns a
+mapping `{layer_name: local_path}`. Raises `SitingDownloadError` if a layer
+has no configured URL and is not already cached.
+
+### `SitingConfig`
+
+Dataclass attached to `OTEXConfig.siting`. See the
+[Siting tutorial](../tutorials/siting.md#configuration-reference) for the
+full field listing and defaults.
 
 ---
 

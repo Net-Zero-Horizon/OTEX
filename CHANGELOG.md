@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Site-screening (siting) layers** (`otex.data.siting`)
+  - Protected areas exclusion via WDPA (April 2026 snapshot, IUCN I-IV strict
+    categories, configurable buffer)
+  - Shipping-lane exclusion via World Bank Global Vessel Density (P95 cutoff,
+    configurable buffer)
+  - Seismic hazard cost multiplier via GEM Global Seismic Hazard Map
+    (PGA at 475-yr return period, applied to CAPEX)
+  - Tropical-cyclone cost multiplier via NOAA IBTrACS v04 (track frequency
+    within 100 km, applied to OPEX)
+  - On-demand download of all four global datasets to `~/.otex/siting_cache/`
+    with auto-extraction of zipped distributions; subsequent runs reuse cache
+  - `SitingConfig` dataclass for tuning (buffers, percentile cutoff, weights,
+    normalisation references); fully off by default for backward compatibility
+  - `scripts/build_siting_layers.py` CLI to pre-compute the enriched site CSV
+  - Lazy import of geopandas/rasterio so the core install stays lean; install
+    geospatial extras with `pip install otex[siting]`
+  - Wiring in `otex.regional.run_regional_analysis` to apply hard exclusions
+    and stuff per-site hazard arrays into the cost pipeline; multipliers
+    applied in `otex.economics.costs.capex_opex_lcoe`
 - HYCOM data source support (`otex.data.hycom`)
   - Download ocean temperature data via OPeNDAP (no authentication required)
   - Reanalysis (GLBv0.08/expt_53.X, 1994–2015) and analysis (GLBy0.08/expt_93.0, 2019–2024) experiments

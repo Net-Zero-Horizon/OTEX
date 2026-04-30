@@ -215,6 +215,36 @@ class DataConfig:
 
 
 @dataclass
+class SitingConfig:
+    """Site-screening configuration: protected areas, shipping lanes, hazards."""
+
+    # Master switches
+    enable_mpa_filter: bool = False        # Exclude WDPA IUCN I-IV
+    enable_ais_filter: bool = False        # Exclude high-traffic shipping lanes
+    enable_hazard_costs: bool = False      # Apply seismic + cyclone cost multipliers
+
+    # Buffers (km) applied around polygons/lines before point-in-buffer test
+    mpa_buffer_km: float = 5.0
+    ais_buffer_km: float = 5.0
+
+    # AIS exclusion percentile: density above this percentile excludes the site
+    ais_exclusion_pct: float = 95.0
+
+    # Multiplier weights. Final factor: 1 + w * normalized_value, value in [0, 1]
+    w_ais: float = 0.20            # Applied to BOTH CAPEX and OPEX
+    w_seismic: float = 0.15        # Applied to CAPEX only
+    w_cyclone: float = 0.25        # Applied to OPEX only
+
+    # Normalization references (values >= ref clamp to 1.0)
+    pga_ref_g: float = 0.4                 # PGA at 475-yr return period [g]
+    cyclone_ref_per_yr: float = 0.5        # cyclone tracks/yr in 100km radius
+
+    # Cache & refresh
+    cache_dir: Optional[str] = None        # Defaults to ~/.otex/siting_cache
+    refresh: bool = False                  # If True, re-download even if cached
+
+
+@dataclass
 class OTEXConfig:
     """
     Complete OTEX configuration.
@@ -239,6 +269,7 @@ class OTEXConfig:
     cycle: CycleConfig = field(default_factory=CycleConfig)
     plant: PlantConfig = field(default_factory=PlantConfig)
     data: DataConfig = field(default_factory=DataConfig)
+    siting: SitingConfig = field(default_factory=SitingConfig)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to nested dictionary."""
@@ -423,6 +454,21 @@ class OTEXConfig:
             'year': self.data.year,
             'date_start': self.data.date_start,
             'date_end': self.data.date_end,
+
+            # Siting
+            'siting_enable_mpa_filter': self.siting.enable_mpa_filter,
+            'siting_enable_ais_filter': self.siting.enable_ais_filter,
+            'siting_enable_hazard_costs': self.siting.enable_hazard_costs,
+            'siting_mpa_buffer_km': self.siting.mpa_buffer_km,
+            'siting_ais_buffer_km': self.siting.ais_buffer_km,
+            'siting_ais_exclusion_pct': self.siting.ais_exclusion_pct,
+            'siting_w_ais': self.siting.w_ais,
+            'siting_w_seismic': self.siting.w_seismic,
+            'siting_w_cyclone': self.siting.w_cyclone,
+            'siting_pga_ref_g': self.siting.pga_ref_g,
+            'siting_cyclone_ref_per_yr': self.siting.cyclone_ref_per_yr,
+            'siting_cache_dir': self.siting.cache_dir,
+            'siting_refresh': self.siting.refresh,
         }
 
         return legacy

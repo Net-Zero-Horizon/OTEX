@@ -89,6 +89,7 @@ OTEX enables researchers and engineers to:
 
 ### Analysis Capabilities
 - **Regional Analysis**: Site-specific LCOE maps and power profiles
+- **Site Screening**: Optional exclusion of protected areas (WDPA) and busy shipping lanes (World Bank vessel density), plus seismic and cyclone risk-based cost multipliers (GEM PGA, NOAA IBTrACS)
 - **Uncertainty Analysis**: Monte Carlo with Latin Hypercube Sampling
 - **Sensitivity Analysis**: Sobol indices and Tornado diagrams
 - **Off-design Performance**: Time-resolved power output profiles
@@ -109,6 +110,9 @@ pip install otex[coolprop]
 
 # Uncertainty analysis (Sobol indices)
 pip install otex[uncertainty]
+
+# Siting layers (protected areas, shipping lanes, seismic and cyclone hazards)
+pip install otex[siting]
 
 # All optional dependencies
 pip install otex[all]

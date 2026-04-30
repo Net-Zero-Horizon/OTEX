@@ -86,6 +86,30 @@ Or install separately:
 pip install SALib>=1.4.0
 ```
 
+### Siting Layers (Geospatial Filtering)
+
+Site-screening for protected areas, shipping lanes, and natural hazards
+requires geospatial libraries:
+
+```bash
+pip install otex[siting]
+```
+
+This installs:
+
+| Package | Purpose |
+|---------|---------|
+| geopandas ≥0.12 | Vector geospatial operations (point-in-polygon for WDPA) |
+| rasterio ≥1.3 | Raster sampling (vessel density, PGA) |
+| shapely ≥2.0 | Geometry buffering |
+| pyproj ≥3.4 | Coordinate reference system reprojection |
+| requests ≥2.28 | Layer downloads |
+
+The first time a siting layer is needed, OTEX downloads it on demand to
+`~/.otex/siting_cache/`. Total cache size is ~5 GB for the full set
+(WDPA + vessel density + PGA + IBTrACS). See the
+[Siting tutorial](tutorials/siting.md) for details.
+
 ### All Optional Dependencies
 
 ```bash
@@ -95,6 +119,7 @@ pip install otex[all]
 This includes:
 - CoolProp
 - SALib
+- geopandas, rasterio, shapely, pyproj, requests (siting)
 - pytest and pytest-cov (for testing)
 
 ## Development Installation
