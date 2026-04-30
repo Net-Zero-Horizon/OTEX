@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-01
+
 ### Added
 - **Site-screening (siting) layers** (`otex.data.siting`)
   - Protected areas exclusion via WDPA (April 2026 snapshot, IUCN I-IV strict

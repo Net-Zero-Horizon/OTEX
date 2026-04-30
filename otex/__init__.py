@@ -11,7 +11,7 @@ Main modules:
 - otex.config: Centralized configuration management
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.3"
 __author__ = "OTEX Development Team"
 
 from .config import OTEXConfig, get_default_config
