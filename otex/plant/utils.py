@@ -81,8 +81,31 @@ def saturation_pressures_and_temperatures(T_WW_in,T_CW_in,del_T_WW,del_T_CW,inpu
             T_cond[infeasible_T==1] = np.nan
             T_evap[infeasible_T==1] = np.nan
 
-    # Check if modern working fluid object is available
-    if 'working_fluid' in inputs and inputs['working_fluid'] is not None:
+    # Mixture cycles (Kalina, Uehara) need their own bubble-point pressures,
+    # not the NH3 polynomial. Otherwise p_evap is the pressure where pure NH3
+    # boils at T_evap, but the basic NH3-H2O solution at the same temperature
+    # has a higher bubble point — the cycle then runs at non-physical states.
+    cycle = inputs.get('thermodynamic_cycle')
+    if cycle is not None and hasattr(cycle, 'mixture') and hasattr(cycle, 'x_basic'):
+        mixture = cycle.mixture
+        x_basic = cycle.x_basic
+        # Bubble point of the basic solution at the evaporator/absorber temps
+        T_evap_arr_calc = np.atleast_1d(T_evap)
+        T_cond_arr_calc = np.atleast_1d(T_cond)
+        p_evap_flat = np.array([
+            mixture.saturation_pressure(t, x_basic) if np.isfinite(t) else np.nan
+            for t in T_evap_arr_calc.ravel()
+        ])
+        p_cond_flat = np.array([
+            mixture.saturation_pressure(t, x_basic) if np.isfinite(t) else np.nan
+            for t in T_cond_arr_calc.ravel()
+        ])
+        p_evap = p_evap_flat.reshape(T_evap_arr_calc.shape)
+        p_cond = p_cond_flat.reshape(T_cond_arr_calc.shape)
+        if np.isscalar(T_evap):
+            p_evap = float(p_evap)
+            p_cond = float(p_cond)
+    elif 'working_fluid' in inputs and inputs['working_fluid'] is not None:
         working_fluid = inputs['working_fluid']
         p_evap = working_fluid.saturation_pressure(T_evap)
         p_cond = working_fluid.saturation_pressure(T_cond)
@@ -176,19 +199,21 @@ def enthalpies_entropies(p_evap,p_cond,inputs):
             }
 
         elif 'kalina' in cycle_name:
-            # Kalina cycle: uses different state numbering
-            # State 1: Condenser exit (rich stream)
-            # State 7: Turbine inlet (separator vapor)
-            # State 10: Turbine exit
+            # Kalina KCS-11 (faithful single-loop implementation):
+            # State 1: absorber exit (basic liquid)
+            # State 2: pump exit
+            # State 5: turbine inlet (separator rich vapor)  - was h_7 in the
+            #          previous implementation; aliased via h_7_legacy.
+            # State 7: turbine exit                          - was h_10.
+            # State 4: two-phase basic at separator inlet
             enthalpies = {
                 'h_1': states['h_1'],
                 'h_2': states['h_2'],
-                'h_3': states['h_7'],  # Turbine inlet (separator vapor)
-                'h_4': states['h_10'],  # Turbine exit
-                # Store additional Kalina-specific states
-                'h_evap_in': states.get('h_5', states['h_2']),
-                'h_evap_out': states.get('h_6', states['h_7']),
-                'split_ratio': states.get('split_ratio', 0.7),
+                'h_3': states.get('h_7_legacy', states.get('h_5')),
+                'h_4': states.get('h_10_legacy', states.get('h_7')),
+                'h_evap_in': states.get('h_3', states['h_2']),
+                'h_evap_out': states.get('h_4', states.get('h_5')),
+                'split_ratio': states.get('split_ratio', 0.30),
                 'cycle_type': 'kalina',
             }
 

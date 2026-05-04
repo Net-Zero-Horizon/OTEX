@@ -342,7 +342,7 @@ def optimize_depth_with_real_data(temperature_profiles, coordinates, inputs, cos
             capex_baseline = inputs.get('capex_reference', 500e6)
 
             capex_ratio = (capex_baseline + pipe_cost) / capex_baseline
-            energy_baseline = abs(inputs.get('p_gross', -136000)) * 8760
+            energy_baseline = abs(inputs.get('p_gross', -100000)) * 8760
             energy_increment = power_benefit * 8760
             energy_ratio = (energy_baseline + energy_increment) / energy_baseline
 

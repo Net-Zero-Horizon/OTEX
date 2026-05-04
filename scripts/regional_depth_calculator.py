@@ -241,7 +241,7 @@ def compare_with_current():
 
     # Rough estimate: $30-50 per meter of pipe length per kW
     cost_per_meter_per_kw = 40  # $/m/kW
-    plant_size_kw = 136000  # 136 MW
+    plant_size_kw = 100000  # 100 MW
 
     total_depth_reduction = df['depth_change_m'].sum()
     avg_depth_reduction_per_region = df['depth_change_m'].mean()

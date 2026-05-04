@@ -19,7 +19,7 @@ from otex.data.cmems import download_data, data_processing, load_temperatures
 
 def run_region(
     studied_region,
-    p_gross=-136000,
+    p_gross=-100000,
     cost_level='low_cost',
     year=2020,
     cycle_type='rankine_closed',
@@ -145,8 +145,8 @@ Examples:
 
     parser.add_argument('--regions', nargs='+', default=None,
                         help='Specific regions to analyze (default: all from CSV)')
-    parser.add_argument('--max-power', type=int, default=-136000,
-                        help='Maximum gross power in kW (caps demand-based sizing, default: -136000)')
+    parser.add_argument('--max-power', type=int, default=-100000,
+                        help='Maximum gross power in kW (caps demand-based sizing, default: -100000)')
     parser.add_argument('--cost', '-c', choices=['low_cost', 'high_cost'], default='low_cost',
                         help='Cost level (default: low_cost)')
     parser.add_argument('--year', '-y', type=int, default=2020,

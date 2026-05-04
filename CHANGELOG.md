@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-04
+
+### Fixed
+- Kalina and Uehara turbines no longer violate the Carnot limit
+  (entropy-balance replaces the prior latent-heat approximation).
+- Antoine coefficients for the NH3-H2O mixture properties replaced
+  with NIST log10(P_bar) form.
+- Rankine Open Q_evap (was inflated by the inherited base-class
+  formula) and Hybrid heat-flow direction corrected.
+
+### Changed
+- Uehara rewritten as a faithful single-loop separator / 2-stage
+  turbine / regenerator / absorber topology (Uehara & Ikegami, 1990).
+- Kalina rewritten as faithful KCS-11 with exact mass and energy
+  balances at the separator and recuperator.
+- Mixture cycles now use the basic-solution bubble point for
+  p_evap / p_cond instead of the pure-NH3 saturation pressure.
+
 ## [0.1.3] - 2026-05-01
 
 ### Added

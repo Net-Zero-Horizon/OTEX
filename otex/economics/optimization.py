@@ -115,7 +115,7 @@ def calculate_thermal_benefit(T_CW, T_CW_reference, T_WW, inputs):
 
     # Power benefit (assuming same gross power target)
     # Better efficiency means less pumping power needed
-    p_gross = inputs.get('p_gross', -136000)
+    p_gross = inputs.get('p_gross', -100000)
 
     # Rough estimate: 1°C colder water = 2-3% efficiency improvement
     # This is a simplified model
@@ -193,7 +193,7 @@ def optimize_cw_depth_for_location(T_WW, T_surface, depth_range, inputs, cost_le
         capex_ratio = (capex_baseline + capex_increment) / capex_baseline
 
         # Energy benefit
-        energy_baseline = abs(inputs.get('p_gross', -136000)) * 8760  # kWh/yr
+        energy_baseline = abs(inputs.get('p_gross', -100000)) * 8760  # kWh/yr
         energy_increment = power_benefit * 8760
         energy_ratio = (energy_baseline + energy_increment) / energy_baseline
 
@@ -318,7 +318,7 @@ if __name__ == "__main__":
 
     # Mock inputs
     inputs = {
-        'p_gross': -136000,  # kW
+        'p_gross': -100000,  # kW
         'min_depth': -600,
         'max_depth': -3000,
         'lcoe_reference': 15.0,  # ct/kWh at reference depth

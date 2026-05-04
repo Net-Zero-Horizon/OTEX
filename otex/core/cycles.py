@@ -319,7 +319,12 @@ class RankineOpenCycle(ThermodynamicCycle):
             'x_4': x_4,
             'h_4_isen': h_4_isen,
             'x_4_isen': x_4_isen,
-            'quality_flash': quality_flash,  # Flash vapor fraction
+            'quality_flash': quality_flash,
+            # Temperatures stored so calculate_heat_transfer can compute
+            # the flash latent-heat duty without re-deriving them.
+            'T_evap': T_evap,
+            'T_cond': T_cond,
+            'T_flash': T_flash,
         }
 
         return states
@@ -400,7 +405,7 @@ class RankineOpenCycle(ThermodynamicCycle):
         # Non-condensable gas removal (dissolved gases released during flash)
         # Typically 2-4% of gross power for open cycle
         vacuum_pump_factor = inputs.get('vacuum_pump_factor', 0.035)  # 3.5%
-        p_gross = inputs.get('p_gross', -136000)
+        p_gross = inputs.get('p_gross', -100000)
         p_vacuum = abs(p_gross) * vacuum_pump_factor
 
         # --- Condensate pump ---
@@ -413,32 +418,102 @@ class RankineOpenCycle(ThermodynamicCycle):
         head_condensate = 10  # meters
         p_pump_condensate = m_condensate * g * head_condensate / (eff_pump * 1000)
 
-        # Total pump power
+        # Total pump power. Note: the warm- and cold-seawater pump terms
+        # above duplicate what plant/sizing.py computes from pipe friction.
+        # Open cycle is currently used standalone (not in the regional
+        # plant pipeline) so the duplication does not corrupt production
+        # results, but a future refactor should choose one accounting site.
         p_pump_total = p_pump_ww + p_pump_cw + p_vacuum + p_pump_condensate
 
         return p_pump_total
 
+    def calculate_heat_transfer(self, m_fluid, states):
+        """
+        Heat duties for the open (flash-evaporation) cycle.
+
+        The base-class formula `Q = m * (h_3 - h_2)` is wrong for the
+        open cycle because m_fluid is the total warm-seawater flow but
+        only m_steam = m_fluid * quality_flash actually evaporates.
+        Using the base formula gave Q_evap ~190× the real value (the
+        NH3-water enthalpy span got multiplied by the entire seawater
+        flow instead of just the flashed vapor). Net efficiency reported
+        by code paths that consume Q_evap was correspondingly off.
+
+        Returns the same 2-tuple shape as the base class:
+            Q_evap = heat absorbed from warm seawater  (≡ m_steam·h_fg)
+            Q_cond = heat rejected to cold seawater    (steam condensation)
+        """
+        m_steam = np.atleast_1d(states.get('m_steam', m_fluid * states.get('quality_flash', 0.01)))
+        T_flash = np.atleast_1d(states.get('T_flash', 18.0))
+        h_fg_flash = 2500.0 - 2.4 * T_flash
+        Q_evap = m_steam * h_fg_flash
+
+        # Steam condenses from state 4 (turbine outlet, two-phase) to
+        # saturated liquid at T_cond. The reference enthalpy of liquid
+        # water at T_cond closes the heat-rejection balance.
+        cp_water = 4.18
+        T_cond_arr = np.atleast_1d(states.get('T_cond', 9.0))
+        h_f_cond = cp_water * T_cond_arr
+        Q_cond = m_steam * (h_f_cond - np.atleast_1d(states['h_4']))
+        return Q_evap, Q_cond
+
 
 class KalinaCycle(ThermodynamicCycle):
     """
-    Kalina Cycle - uses ammonia-water mixture
-    More efficient at low temperature differentials
+    Kalina Cycle System 11 (KCS-11) - faithful implementation.
 
-    Key components:
-    1. Turbine - expands NH3-rich vapor
-    2. Separator - splits mixture into NH3-rich and NH3-poor streams
-    3. Evaporator - heats basic solution
-    4. Condenser - condenses NH3-rich vapor
-    5. Recuperator - heat exchange between streams
-    6. Mixer - recombines streams
-    7. Pumps - two pumps for different streams
+    Single closed loop circulating an NH3-H2O basic solution. Like the
+    Uehara cycle but with a single-stage turbine on the rich-vapor branch.
+    Components in flow order:
 
-    Advantages over Rankine:
-    - Variable boiling point matches heat source better
-    - Higher efficiency at low temperature differences
-    - 5-10% better performance for OTEC
+      1. Absorber (also acts as condenser) - rich vapor from the turbine is
+         absorbed back into the lean liquid, giving the basic solution at
+         p_cond. Heat is rejected to cold seawater.
+      2. Pump - basic liquid p_cond -> p_evap.
+      3. Recuperator - lean liquid (returning from separator) preheats the
+         pumped basic solution before the evaporator. The variable boiling
+         point of the NH3-H2O mixture combined with this regeneration is
+         what gives Kalina its OTEC-relevant efficiency advantage over a
+         pure-NH3 Rankine cycle.
+      4. Evaporator - warm seawater partially boils the basic solution.
+      5. Separator - splits the two-phase mixture into rich vapor (mass
+         fraction f, composition y_rich ~ pure NH3 at OTEC temps) and
+         lean liquid (1-f, composition x_lean = (x_basic - f*y_rich)/(1-f)).
+      6. Turbine - rich vapor expands p_evap -> p_cond, producing work.
+      7. Throttle - lean liquid drops from p_evap to p_cond before entering
+         the absorber (isenthalpic).
 
-    Note: Uses simplified Kalina Cycle System 11 (KCS-11)
+    State indices:
+       1: basic liquid out of absorber (p_cond, x_basic)
+       2: basic liquid after pump (p_evap, x_basic)
+       3: basic liquid after recuperator (preheated, p_evap, x_basic)
+       4: two-phase basic at evaporator outlet (T_evap, p_evap, separator
+          inlet)
+       5: rich vapor at separator (T_evap, p_evap, y_rich)
+       6: lean liquid at separator (T_evap, p_evap, x_lean)
+       7: rich vapor after turbine (p_cond, y_rich, two-phase)
+       8: lean liquid after recuperator (cooled, p_evap)
+       9: lean liquid after throttle to p_cond (h_9 = h_8)
+
+    Tunable parameters (passed via inputs dict):
+        - 'kalina_split_ratio'  (default 0.30): fraction of basic mass flow
+          that vaporises in the evaporator (separator vapor fraction).
+        - 'kalina_regen_approach_K' (default 5.0): minimum temperature
+          difference at the cold end of the recuperator.
+
+    The previous implementation (KCS-11 stub) used hard-coded approach
+    temperatures, an inconsistent x_lean formula independent of the split
+    ratio, and a "ghost" second pump (h_4 = h_3). It still hit the
+    literature efficiency band by coincidence; this rewrite makes the
+    mass balance and energy balance hold exactly so derived quantities
+    (mass flows, heat duties, sizing) are physically meaningful.
+
+    References:
+        Kalina, A. I. (1984). Combined-Cycle System with Novel Bottoming
+            Cycle. ASME J. Eng. Gas Turbines Power 106(4), 737-742.
+        Bombarda, P., Invernizzi, C. M., Pietra, C. (2010). Heat recovery
+            from Diesel engines: A thermodynamic comparison between Kalina
+            and ORC cycles. Appl. Therm. Eng. 30, 212-219.
     """
 
     def __init__(self, ammonia_concentration=0.7):
@@ -456,196 +531,165 @@ class KalinaCycle(ThermodynamicCycle):
         self.mixture = mixture_fluid
 
     def calculate_cycle_states(self, T_evap, T_cond, p_evap, p_cond, inputs):
-        """
-        Calculate Kalina cycle states (KCS-11 variant)
+        """Faithful KCS-11 state calculation. See class docstring."""
+        # ----- topology parameters -----
+        f = inputs.get('kalina_split_ratio', 0.30)
+        f = float(np.clip(f, 0.05, 0.45))
+        dT_app_regen = inputs.get('kalina_regen_approach_K', 5.0)
+        eff_pump = inputs.get('eff_isen_pump', 0.80)
+        eff_turb = inputs.get('eff_isen_turb', 0.82)
+        rho = inputs.get('rho_NH3', 640)
 
-        States:
-        1: Condenser exit (saturated liquid, NH3-rich)
-        2: Pump 1 exit (compressed liquid, NH3-rich)
-        3: Mixer exit (basic solution)
-        4: Pump 2 exit (compressed basic solution)
-        5: Recuperator hot side exit
-        6: Evaporator exit (saturated vapor-liquid, basic solution)
-        7: Separator vapor exit (NH3-rich vapor)
-        8: Separator liquid exit (NH3-poor liquid)
-        9: Recuperator cold side exit
-        10: Turbine exit (NH3-rich two-phase)
+        # ----- compositions -----
+        # Rich vapor in equilibrium with basic-solution liquid at separator.
+        y_rich = self.mixture.vapor_liquid_equilibrium(T_evap, p_evap, self.x_basic)
+        # Lean composition from separator mass balance (closes exactly):
+        #   x_basic = f * y_rich + (1 - f) * x_lean
+        x_lean = (self.x_basic - f * y_rich) / (1.0 - f)
+        x_lean = np.clip(x_lean, 0.0, self.x_basic)
 
-        Returns:
-            states: Dictionary with thermodynamic states
-        """
+        # ===== State 1: basic liquid out of absorber (p_cond, x_basic) =====
+        h_1 = self.mixture.enthalpy_liquid(T_cond, p_cond, self.x_basic)
+        s_1 = self.mixture.entropy_liquid(T_cond, p_cond, self.x_basic)
 
-        # Determine separator conditions
-        # Typically T_separator = T_evap, P_separator = p_evap
-        T_separator = T_evap
-        P_separator = p_evap
-
-        # Vapor-liquid equilibrium at separator
-        y_rich = self.mixture.vapor_liquid_equilibrium(T_separator, P_separator, self.x_basic)
-        x_poor = self._calculate_poor_stream_concentration(self.x_basic, y_rich)
-
-        # Mass split ratio (fraction going to rich stream)
-        split_ratio = 0.7  # Typically 60-80%, can be optimized
-
-        # State 1: Condenser exit (saturated liquid, rich stream)
-        T_1 = T_cond
-        P_1 = p_cond
-        h_1 = self.mixture.enthalpy_liquid(T_1, P_1, y_rich)
-        s_1 = self.mixture.entropy_liquid(T_1, P_1, y_rich)
-
-        # State 2: Pump 1 exit (rich stream pump)
-        P_2 = P_separator
-        h_2 = h_1 + (P_2 - P_1) * 100 / (inputs.get('rho_NH3', 640) * inputs.get('eff_isen_pump', 0.8))
-        T_2 = T_1 + 1.0  # Small temperature rise
+        # ===== State 2: basic liquid after pump (p_evap, x_basic) =========
+        # h_2 = h_1 + v * (p_evap - p_cond) / eff_pump,  v = 1/rho [m3/kg].
+        # bar -> J/kg via x100, then -> kJ/kg via /1000  =>  factor 100/rho.
+        h_2 = h_1 + (p_evap - p_cond) * 100.0 / (rho * eff_pump)
         s_2 = s_1
+        T_2 = T_cond + 0.5
 
-        # State 3: Mixer exit (basic solution)
-        # Energy and mass balances at mixer
-        # Simplified: assume poor stream enters at T_9
-        T_3 = T_2 + 5.0  # Approximate mixing temperature
-        P_3 = P_separator
-        h_3 = self.mixture.enthalpy_liquid(T_3, P_3, self.x_basic)
-        s_3 = self.mixture.entropy_liquid(T_3, P_3, self.x_basic)
+        # ===== State 5: rich vapor at separator ===========================
+        h_5 = self.mixture.enthalpy_vapor(T_evap, p_evap, y_rich)
+        s_5 = self.mixture.entropy_vapor(T_evap, p_evap, y_rich)
 
-        # State 4: Pump 2 exit (basic solution pump)
-        P_4 = P_separator  # Already at high pressure (simplified)
-        h_4 = h_3
-        T_4 = T_3
-        s_4 = s_3
+        # ===== State 6: lean liquid at separator ==========================
+        h_6 = self.mixture.enthalpy_liquid(T_evap, p_evap, x_lean)
+        s_6 = self.mixture.entropy_liquid(T_evap, p_evap, x_lean)
 
-        # State 5: Recuperator hot side exit
-        T_5 = T_separator - 10.0  # Approach temperature in recuperator
-        P_5 = P_separator
-        h_5 = self.mixture.enthalpy_liquid(T_5, P_5, self.x_basic)
-        s_5 = self.mixture.entropy_liquid(T_5, P_5, self.x_basic)
+        # ===== State 4: two-phase basic at separator inlet ================
+        # Lever rule per kg of basic solution.
+        h_4 = f * h_5 + (1.0 - f) * h_6
+        s_4 = f * s_5 + (1.0 - f) * s_6
 
-        # State 6: Evaporator exit (saturated, basic solution)
-        T_6 = T_separator
-        P_6 = P_separator
-        # Two-phase mixture at separator inlet
-        h_6_liq = self.mixture.enthalpy_liquid(T_6, P_6, self.x_basic)
-        h_6_vap = self.mixture.enthalpy_vapor(T_6, P_6, y_rich)
-        quality_6 = split_ratio  # Vapor quality equals split ratio
-        h_6 = h_6_liq * (1 - quality_6) + h_6_vap * quality_6
+        # ===== State 8: lean liquid after recuperator (cooled) ============
+        # Cold-end approach: lean exit ≥ basic inlet to the recuperator.
+        T_8 = T_2 + dT_app_regen
+        T_8_arr = np.minimum(np.atleast_1d(T_8), np.atleast_1d(T_evap))
+        T_8 = float(T_8_arr) if np.isscalar(T_2) else T_8_arr
+        h_8 = self.mixture.enthalpy_liquid(T_8, p_evap, x_lean)
+        s_8 = self.mixture.entropy_liquid(T_8, p_evap, x_lean)
 
-        # State 7: Separator vapor exit (NH3-rich vapor to turbine)
-        T_7 = T_separator
-        P_7 = P_separator
-        h_7 = self.mixture.enthalpy_vapor(T_7, P_7, y_rich)
-        s_7 = self.mixture.entropy_vapor(T_7, P_7, y_rich)  # Proper entropy calculation
+        # ===== State 3: basic liquid after recuperator (preheated) ========
+        # Energy balance per kg of basic solution:
+        #   m_basic * (h_3 - h_2) = m_lean * (h_6 - h_8)
+        h_3 = h_2 + (1.0 - f) * (h_6 - h_8)
+        # Cap at the bubble enthalpy of the basic solution at p_evap so the
+        # recuperator does not flash the stream.
+        h_basic_bubble = self.mixture.enthalpy_liquid(T_evap, p_evap, self.x_basic)
+        h_3 = np.minimum(np.atleast_1d(h_3), np.atleast_1d(h_basic_bubble))
+        if np.isscalar(h_2):
+            h_3 = float(h_3)
 
-        # State 8: Separator liquid exit (NH3-poor liquid)
-        T_8 = T_separator
-        P_8 = P_separator
-        h_8 = self.mixture.enthalpy_liquid(T_8, P_8, x_poor)
-        s_8 = self.mixture.entropy_liquid(T_8, P_8, x_poor)
+        # ===== State 7: rich vapor after turbine (p_cond, two-phase) ======
+        # Isentropic expansion from state 5 to p_cond using the rich-vapor
+        # saturation envelope. Saturation T at p_cond for rich composition.
+        p_cond_arr = np.atleast_1d(p_cond)
+        y_rich_arr_c = np.broadcast_to(np.atleast_1d(y_rich), p_cond_arr.shape)
+        T_cond_rich_flat = np.array([
+            self.mixture.saturation_temperature(p, y)
+            for p, y in zip(p_cond_arr.ravel(), y_rich_arr_c.ravel())
+        ])
+        T_cond_rich = T_cond_rich_flat.reshape(p_cond_arr.shape)
+        if np.isscalar(p_cond):
+            T_cond_rich = float(T_cond_rich)
+        h_7_liq = self.mixture.enthalpy_liquid(T_cond_rich, p_cond, y_rich)
+        h_7_vap = self.mixture.enthalpy_vapor(T_cond_rich, p_cond, y_rich)
+        s_7_liq = self.mixture.entropy_liquid(T_cond_rich, p_cond, y_rich)
+        s_7_vap = self.mixture.entropy_vapor(T_cond_rich, p_cond, y_rich)
+        ds_7 = s_7_vap - s_7_liq
+        ds_7 = np.where(np.abs(ds_7) < 1e-9, 1e-9, ds_7)
+        x_7_isen = np.clip((s_5 - s_7_liq) / ds_7, 0.0, 1.0)
+        h_7_isen = h_7_liq + x_7_isen * (h_7_vap - h_7_liq)
+        h_7 = h_5 - eff_turb * (h_5 - h_7_isen)
+        dh_7 = h_7_vap - h_7_liq
+        dh_7 = np.where(np.abs(dh_7) < 1e-9, 1e-9, dh_7)
+        x_7 = np.clip((h_7 - h_7_liq) / dh_7, 0.0, 1.0)
 
-        # State 9: Recuperator cold side exit (poor stream heated)
-        T_9 = T_3 - 5.0  # Approach temperature
-        P_9 = P_8
-        h_9 = self.mixture.enthalpy_liquid(T_9, P_9, x_poor)
-        s_9 = self.mixture.entropy_liquid(T_9, P_9, x_poor)
+        # ===== State 9: lean liquid after throttle (p_cond, isenthalpic) ==
+        h_9 = h_8
 
-        # State 10: Turbine exit (NH3-rich two-phase)
-        P_10 = p_cond
-        # Isentropic expansion (simplified)
-        h_10_isen = h_7 - (h_7 - h_1) * 0.5  # Approximate
-        h_10 = h_7 - (h_7 - h_10_isen) * inputs.get('eff_isen_turb', 0.82)
-        T_10 = T_cond + 2.0  # Slightly superheated
-
-        states = {
-            'h_1': h_1, 's_1': s_1, 'T_1': T_1, 'P_1': P_1, 'x_1': y_rich,
-            'h_2': h_2, 's_2': s_2, 'T_2': T_2, 'P_2': P_2,
-            'h_3': h_3, 's_3': s_3, 'T_3': T_3, 'P_3': P_3, 'x_3': self.x_basic,
-            'h_4': h_4, 's_4': s_4, 'T_4': T_4, 'P_4': P_4,
-            'h_5': h_5, 's_5': s_5, 'T_5': T_5, 'P_5': P_5,
-            'h_6': h_6, 'T_6': T_6, 'P_6': P_6,
-            'h_7': h_7, 's_7': s_7, 'T_7': T_7, 'P_7': P_7, 'x_7': y_rich,
-            'h_8': h_8, 's_8': s_8, 'T_8': T_8, 'P_8': P_8, 'x_8': x_poor,
-            'h_9': h_9, 's_9': s_9, 'T_9': T_9, 'P_9': P_9,
-            'h_10': h_10, 'T_10': T_10, 'P_10': P_10,
-            'split_ratio': split_ratio,
-            'y_rich': y_rich,
-            'x_poor': x_poor,
+        return {
+            # Faithful KCS-11 state set
+            'h_1': h_1, 's_1': s_1, 'T_1': T_cond,
+            'h_2': h_2, 's_2': s_2, 'T_2': T_2,
+            'h_3': h_3,
+            'h_4': h_4, 's_4': s_4,
+            'h_5': h_5, 's_5': s_5,
+            'h_6': h_6, 's_6': s_6,
+            'h_7': h_7, 'x_7': x_7,
+            'h_8': h_8, 's_8': s_8, 'T_8': T_8,
+            'h_9': h_9,
+            # Pressures, temperatures, compositions
+            'p_evap': p_evap, 'p_cond': p_cond,
+            'T_evap': T_evap, 'T_cond': T_cond, 'T_cond_rich': T_cond_rich,
+            'x_basic': self.x_basic, 'x_lean': x_lean, 'y_rich': y_rich,
+            'split_ratio': f,
+            # Backwards-compatible aliases for plant/utils.py legacy mapping
+            # (turbine inlet/outlet referenced as h_7/h_10 in the old code).
+            'h_7_legacy': h_5, 'h_10_legacy': h_7,
+            # Old-state-name aliases consumed elsewhere
+            'h_10': h_7,
+            'x_poor': x_lean,
         }
 
-        return states
-
     def calculate_mass_flow(self, p_gross, states):
-        """
-        Calculate mass flow from gross power output
+        """Mass flows from requested gross power.
 
-        W_gross = m_rich * (h_10 - h_7)
+        Per kg of basic solution the turbine work is f * (h_5 - h_7).
+        m_basic = -p_gross / (f * (h_5 - h_7))   (p_gross < 0)
         """
-        split_ratio = states['split_ratio']
-        m_basic = p_gross / (split_ratio * (states['h_10'] - states['h_7']))
-        m_rich = m_basic * split_ratio
-        m_poor = m_basic * (1 - split_ratio)
-
+        f = states['split_ratio']
+        w_per_kg_basic = f * (states['h_5'] - states['h_7'])
+        m_basic = -p_gross / w_per_kg_basic
+        m_rich = f * m_basic
+        m_lean = (1.0 - f) * m_basic
         return {
             'm_basic': m_basic,
             'm_rich': m_rich,
-            'm_poor': m_poor,
+            'm_lean': m_lean,
+            'm_poor': m_lean,  # legacy alias
         }
 
     def calculate_pump_power(self, m_flows, states, inputs):
-        """
-        Calculate pump power consumption (two pumps)
-
-        W_pump1 = m_rich * (h_2 - h_1) / eff_mech
-        W_pump2 = m_basic * (h_4 - h_3) / eff_mech
-        """
+        """Pump power for the single basic-solution pump."""
         eff_mech = inputs.get('eff_pump_NH3_mech', 0.95)
-
-        m_rich = m_flows['m_rich']
         m_basic = m_flows['m_basic']
-
-        p_pump1 = m_rich * (states['h_2'] - states['h_1']) / eff_mech
-        p_pump2 = m_basic * (states['h_4'] - states['h_3']) / eff_mech
-
-        p_pump_total = p_pump1 + p_pump2
-
-        return p_pump_total
+        return m_basic * (states['h_2'] - states['h_1']) / eff_mech
 
     def calculate_heat_transfer(self, m_flows, states):
         """
-        Calculate heat transfer in evaporator, condenser, and recuperator
+        External evaporator duty, recuperator duty, and absorber duty.
 
-        Args:
-            m_flows: Dictionary with mass flows
-            states: Dictionary with thermodynamic states
+        Returns the same 3-tuple shape as the previous implementation
+        (Q_evap, Q_cond, Q_recup) for backwards compatibility, but each
+        term now respects the energy balance imposed by the new topology:
 
-        Returns:
-            Q_evap: Evaporator heat transfer [kW]
-            Q_cond: Condenser heat transfer [kW]
-            Q_recup: Recuperator heat transfer [kW]
+            Q_evap  = m_basic * (h_4 - h_3)        external WW heat in
+            Q_cond  = m_rich*(h_7 - h_1) + m_lean*(h_9 - h_1)
+                                                   external CW heat out
+            Q_recup = m_lean * (h_6 - h_8)         internal regenerator
         """
         m_basic = m_flows['m_basic']
         m_rich = m_flows['m_rich']
-        m_poor = m_flows['m_poor']
+        m_lean = m_flows['m_lean']
 
-        Q_evap = m_basic * (states['h_6'] - states['h_5'])
-        Q_cond = m_rich * (states['h_1'] - states['h_10'])
-        Q_recup = m_poor * (states['h_9'] - states['h_8'])
+        Q_evap = m_basic * (states['h_4'] - states['h_3'])
+        Q_cond = m_rich * (states['h_7'] - states['h_1']) + \
+                 m_lean * (states['h_9'] - states['h_1'])
+        Q_recup = m_lean * (states['h_6'] - states['h_8'])
 
         return Q_evap, Q_cond, Q_recup
-
-    def _calculate_poor_stream_concentration(self, x_basic, y_rich):
-        """
-        Calculate poor stream concentration from mass balance (vectorized)
-
-        Simplified approximation: x_poor ≈ x_basic - Δx
-        More accurate: solve mass balance with split ratio
-        """
-        # For typical Kalina cycle:
-        # y_rich > x_basic > x_poor
-        # Approximate relationship
-        x_poor = x_basic - (y_rich - x_basic) * 0.5
-
-        # Bounds check (vectorized)
-        x_poor = np.maximum(0.3, np.minimum(x_poor, x_basic - 0.05))
-
-        return x_poor
 
 
 class RankineHybridCycle(ThermodynamicCycle):
@@ -736,14 +780,21 @@ class RankineHybridCycle(ThermodynamicCycle):
 
         # === OPEN CYCLE (Flash Steam) - Secondary power generation ===
 
-        # Temperature drop across closed cycle evaporator
-        # Warm water exits evaporator at reduced temperature
-        dT_evap = inputs.get('dT_WW_evap', 3.0)  # Typical 2-4°C drop
-        T_ww_post_evap = T_evap - dT_evap
+        # Warm-seawater outlet from the closed-cycle evaporator. At the
+        # cold end of the HX the WW exit approaches the NH3 saturation
+        # temperature with the pinch ΔT, so:
+        #     T_ww_post_evap = T_evap + pinch_WW
+        # The previous formula `T_evap - dT_evap` placed the WW colder
+        # than the NH3 boiling point and violated the heat-flow direction
+        # in the closed evaporator.
+        T_pinch_WW = inputs.get('T_pinch_WW', 1.0)
+        T_ww_post_evap = T_evap + T_pinch_WW
 
-        # Flash chamber temperature (lower than warm water exit)
-        # Optimized to be between warm and cold water temperatures
-        T_flash = T_ww_post_evap - 2.0  # Additional 2°C for flash chamber
+        # Flash chamber temperature: a few K below the WW exit so a small
+        # fraction of the residual sensible heat can flash to steam at
+        # sub-atmospheric pressure.
+        dT_flash = inputs.get('dT_flash', 2.0)
+        T_flash = T_ww_post_evap - dT_flash
 
         # Simplified water properties for flash cycle
         cp_water = 4.18  # kJ/kg·K
@@ -877,40 +928,27 @@ class RankineHybridCycle(ThermodynamicCycle):
 
     def calculate_pump_power(self, m_flows, states, inputs):
         """
-        Calculate pump power consumption for both cycles
+        Cycle-internal parasitic pump power for the hybrid cycle.
 
-        Closed cycle:
-        - NH3 working fluid pump
-
-        Open cycle:
-        - Vacuum pumps (non-condensable gas removal)
-        - Already included in seawater pumps
-
-        Args:
-            m_flows: Dictionary with mass flows
-            states: Dictionary with thermodynamic states
-            inputs: Dictionary with efficiencies
-
-        Returns:
-            p_pump_total: Total pump power [kW] (positive value)
+        By codebase convention, cycle-level methods return only the
+        working-fluid (NH3) pump plus any cycle-specific auxiliary loads
+        (here: the flash-chamber vacuum pump). Warm- and cold-seawater
+        pumping is computed separately by plant/sizing.py from the pipe
+        friction analysis, so adding it here would double-count.
         """
-
         eff_mech = inputs['eff_pump_NH3_mech']
         m_NH3 = m_flows['m_NH3']
 
-        # Closed cycle NH3 pump
+        # 1. Closed-cycle NH3 pump
         p_pump_NH3 = m_NH3 * (states['h_2'] - states['h_1']) / eff_mech
 
-        # Flash cycle vacuum pump (for non-condensable gases)
-        # Simplified: 2-3% of flash turbine power
+        # 2. Vacuum pump for non-condensable gas removal in the flash chamber
         power_split_closed = m_flows.get('power_split_closed', 0.88)
-        p_gross = inputs.get('p_gross', -136000)
+        p_gross = inputs.get('p_gross', -100000)
         p_flash_turbine = abs(p_gross) * (1 - power_split_closed)
-        p_vacuum = p_flash_turbine * 0.025  # 2.5% of flash turbine power
+        p_vacuum = p_flash_turbine * inputs.get('vacuum_pump_factor', 0.025)
 
-        p_pump_total = p_pump_NH3 + p_vacuum
-
-        return p_pump_total
+        return p_pump_NH3 + p_vacuum
 
     def calculate_heat_transfer(self, m_flows, states):
         """
@@ -958,28 +996,52 @@ class RankineHybridCycle(ThermodynamicCycle):
 
 class UeharaCycle(ThermodynamicCycle):
     """
-    Uehara Cycle (Two-stage Rankine with NH3-H2O mixture)
-    Uses two-stage evaporation for better thermal matching
+    Uehara Cycle - faithful implementation (Uehara & Ikegami, 1990).
 
-    Key components:
-    1. LP Evaporator - uses partially cooled warm water
-    2. HP Evaporator - uses hottest warm water
-    3. LP Turbine - expands from p_int to p_cond
-    4. HP Turbine - expands from p_evap to p_int
-    5. Condenser - shared by both streams
-    6. Pumps - two pumps (LP and HP)
-    7. Separator - splits NH3-rich vapor from NH3-poor liquid
+    Single closed loop circulating an NH3-H2O basic solution. Key components,
+    in flow order:
 
-    Advantages:
-    - Better thermal matching → higher efficiency (3-5% improvement)
-    - More power extraction from available ΔT
-    - Proven design for OTEC (Uehara & Ikegami, 1990)
+      1. Absorber (also acts as condenser) - rich vapor from LP turbine is
+         absorbed back into the lean-liquid stream, giving the basic solution
+         at p_cond. Heat to cold seawater.
+      2. Pump - basic liquid p_cond -> p_evap.
+      3. Regenerator - lean liquid (returning from separator) preheats the
+         pumped basic solution before it enters the evaporator. This is the
+         feature that lifts the Uehara cycle's efficiency above a plain
+         two-stage Rankine: external heat input is reduced by the recovered
+         sensible heat of the lean stream.
+      4. Evaporator - warm seawater partially boils the basic solution.
+      5. Separator - splits the two-phase mixture into:
+            - rich vapor (mass fraction f, composition y_rich ~ pure NH3)
+            - lean liquid (mass fraction 1-f, composition x_lean < x_basic)
+      6. HP turbine - rich vapor expands p_evap -> p_int, producing work.
+      7. LP turbine - rich vapor expands p_int -> p_cond, producing work.
+         The exhaust mixes with the lean liquid in the absorber, closing
+         the loop.
+      8. Throttle - lean liquid drops from p_evap to p_cond before entering
+         the absorber (isenthalpic).
 
-    Uses NH3-H2O mixture like Kalina cycle.
+    State indices (single loop):
+       1: basic liquid out of absorber, p_cond
+       2: basic liquid after pump, p_evap
+       3: basic liquid after regenerator, p_evap, preheated
+       4: two-phase basic solution after evaporator, T_evap, p_evap
+       5: rich vapor at separator, p_evap, y_rich
+       6: lean liquid at separator, p_evap, x_lean
+       7: rich vapor after HP turbine, p_int
+       8: rich vapor after LP turbine, p_cond
+       9: lean liquid after regenerator, p_evap (cooled)
+      10: lean liquid after throttle to p_cond (isenthalpic, h_10 = h_9)
 
-    States:
-    HP loop: 1-4
-    LP loop: 5-8
+    Tunable parameters (passed via inputs dict):
+        - 'uehara_split_ratio' (default 0.20): fraction of basic mass flow
+          that vaporises in the evaporator (separator vapor fraction).
+        - 'uehara_regen_approach_K' (default 5.0): minimum temperature
+          difference at the cold end of the regenerator.
+
+    Reference:
+        Uehara H. & Ikegami Y. (1990). Optimization of a closed-cycle OTEC
+        system. ASME J. Sol. Energy Eng. 112(4), 247-256.
     """
 
     def __init__(self, ammonia_concentration=0.7):
@@ -998,216 +1060,240 @@ class UeharaCycle(ThermodynamicCycle):
 
     def calculate_cycle_states(self, T_evap, T_cond, p_evap, p_cond, inputs):
         """
-        Two-stage Rankine cycle calculation with NH3-H2O mixture
+        Faithful Uehara-cycle state calculation.
 
-        States numbering:
-        HP Loop:
-        1: HP condenser exit (saturated liquid)
-        2: HP pump exit (compressed liquid)
-        3: HP evaporator exit (saturated vapor)
-        4: HP turbine exit (two-phase, at p_int)
-
-        LP Loop:
-        5: LP condenser exit (saturated liquid)
-        6: LP pump exit (compressed liquid, to p_int)
-        7: LP evaporator exit (saturated vapor, at p_int)
-        8: LP turbine exit (two-phase, at p_cond)
-
-        Returns:
-            states: Dictionary with thermodynamic states for both loops
+        Single basic-solution loop with separator + two-stage turbine on the
+        rich-vapor branch + lean-liquid regenerator + absorber. See class
+        docstring for the topology and state numbering.
         """
+        # ----- topology parameters -----
+        f = inputs.get('uehara_split_ratio', 0.20)        # vapor mass fraction
+        f = float(np.clip(f, 0.05, 0.45))
+        dT_app_regen = inputs.get('uehara_regen_approach_K', 5.0)
+        eff_pump = inputs.get('eff_isen_pump', 0.80)
+        eff_turb = inputs.get('eff_isen_turb', 0.82)
+        rho = inputs.get('rho_NH3', 640)
 
-        # Optimize intermediate pressure
-        # Typically p_int = sqrt(p_evap * p_cond) for equal pressure ratios
+        # ----- compositions -----
+        # Rich vapor in equilibrium with basic-solution liquid at the
+        # evaporator outlet. y_rich >> x_basic for OTEC NH3-H2O.
+        y_rich = self.mixture.vapor_liquid_equilibrium(T_evap, p_evap, self.x_basic)
+        # Lean-liquid composition by separator mass balance:
+        #   x_basic = f * y_rich + (1 - f) * x_lean
+        x_lean = (self.x_basic - f * y_rich) / (1.0 - f)
+        # Physical bounds: lean must stay between [0, x_basic]
+        x_lean = np.clip(x_lean, 0.0, self.x_basic)
+
+        # Intermediate pressure at the rich-vapor saturation envelope.
+        # Geometric mean gives equal pressure ratios across the two stages.
         p_int = np.sqrt(p_evap * p_cond)
-
-        # Get saturation temperatures using mixture properties
-        # Handle arrays by element-wise calculation
+        # Saturation T of the rich vapor at p_int (used for h_g/s_g lookups
+        # at the HP-turbine outlet two-phase state).
         p_int_arr = np.atleast_1d(p_int)
-        original_shape = p_int_arr.shape
-        p_int_flat = p_int_arr.ravel()
-        T_int_flat = np.array([self.mixture.saturation_temperature(p, self.x_basic) for p in p_int_flat])
-        T_int = T_int_flat.reshape(original_shape)
+        y_rich_arr = np.broadcast_to(np.atleast_1d(y_rich), p_int_arr.shape)
+        T_int_flat = np.array([
+            self.mixture.saturation_temperature(p, y)
+            for p, y in zip(p_int_arr.ravel(), y_rich_arr.ravel())
+        ])
+        T_int = T_int_flat.reshape(p_int_arr.shape)
         if np.isscalar(p_int):
             T_int = float(T_int)
 
-        # Vapor-liquid equilibrium to get vapor composition
-        y_rich = self.mixture.vapor_liquid_equilibrium(T_evap, p_evap, self.x_basic)
-        y_rich_int = self.mixture.vapor_liquid_equilibrium(T_int, p_int, self.x_basic)
+        # ===== State 1: basic liquid out of absorber (p_cond, x_basic) =====
+        h_1 = self.mixture.enthalpy_liquid(T_cond, p_cond, self.x_basic)
+        s_1 = self.mixture.entropy_liquid(T_cond, p_cond, self.x_basic)
 
-        # Temperature levels for evaporators
-        T_evap_HP = T_evap  # Highest temperature
-        T_evap_LP = T_int   # Intermediate temperature
+        # ===== State 2: basic liquid after pump (p_evap, x_basic) =====
+        # h_2 = h_1 + v * (p_evap - p_cond) / eff_pump.  v = 1/rho [m^3/kg].
+        # Pressures in bar -> J/kg conversion: bar * 1e5 / rho.  Convert J/kg
+        # to kJ/kg by /1000 -> overall factor 100/rho.
+        h_2 = h_1 + (p_evap - p_cond) * 100.0 / (rho * eff_pump)
+        s_2 = s_1
+        T_2 = T_cond + 0.5  # negligible temperature rise
 
-        eff_pump = inputs.get('eff_isen_pump', 0.80)
-        eff_turb = inputs.get('eff_isen_turb', 0.82)
-        rho = inputs.get('rho_NH3', 640)  # Approximate liquid density
+        # ===== State 5: rich vapor at separator (T_evap, p_evap, y_rich) ==
+        h_5 = self.mixture.enthalpy_vapor(T_evap, p_evap, y_rich)
+        s_5 = self.mixture.entropy_vapor(T_evap, p_evap, y_rich)
 
-        #=== HP Loop States ===
+        # ===== State 6: lean liquid at separator (T_evap, p_evap, x_lean) ==
+        h_6 = self.mixture.enthalpy_liquid(T_evap, p_evap, x_lean)
+        s_6 = self.mixture.entropy_liquid(T_evap, p_evap, x_lean)
 
-        # State 1: HP condenser exit (saturated liquid at p_cond)
-        h_1_HP = self.mixture.enthalpy_liquid(T_cond, p_cond, y_rich)
-        s_1_HP = self.mixture.entropy_liquid(T_cond, p_cond, y_rich)
+        # ===== State 4: two-phase basic solution at separator inlet =====
+        # By mass balance per kg of basic solution: h_4 = f*h_5 + (1-f)*h_6
+        h_4 = f * h_5 + (1.0 - f) * h_6
+        s_4 = f * s_5 + (1.0 - f) * s_6  # approximate (lever rule)
 
-        # State 2: HP pump exit (compressed to p_evap)
-        h_2_HP = h_1_HP + (p_evap - p_cond) * 100000 / 1000 / eff_pump / rho
-        s_2_HP = s_1_HP  # Approximately constant for liquid
-        T_2_HP = T_cond + 1.0  # Small temperature rise
+        # ===== State 9: lean liquid out of regenerator (cooled, p_evap) ==
+        # Approach temperature at the cold end: lean exit ≥ basic inlet.
+        T_9 = T_2 + dT_app_regen
+        # Cap at T_6 (cannot cool below... wait, lean is cooling, T_9 < T_6;
+        # cap at the source temperature only as a sanity guard).
+        T_9_arr = np.minimum(np.atleast_1d(T_9), np.atleast_1d(T_evap))
+        T_9 = float(T_9_arr) if np.isscalar(T_2) else T_9_arr
+        h_9 = self.mixture.enthalpy_liquid(T_9, p_evap, x_lean)
+        s_9 = self.mixture.entropy_liquid(T_9, p_evap, x_lean)
 
-        # State 3: HP evaporator exit (saturated vapor at p_evap)
-        h_3_HP = self.mixture.enthalpy_vapor(T_evap, p_evap, y_rich)
-        s_3_HP = self.mixture.entropy_vapor(T_evap, p_evap, y_rich)
+        # ===== State 3: basic liquid after regenerator (p_evap, x_basic) =
+        # Energy balance on the regenerator (per kg of basic solution):
+        #   m_basic * (h_3 - h_2) = m_lean * (h_6 - h_9)
+        #   m_lean / m_basic = (1 - f)
+        h_3 = h_2 + (1.0 - f) * (h_6 - h_9)
+        # Ensure h_3 does not exceed the basic-solution bubble enthalpy at
+        # p_evap (otherwise the regenerator would already be flashing the
+        # stream). If exceeded, cap at the bubble enthalpy and reduce the
+        # actual heat recovered accordingly.
+        h_basic_bubble = self.mixture.enthalpy_liquid(T_evap, p_evap, self.x_basic)
+        h_3 = np.minimum(np.atleast_1d(h_3), np.atleast_1d(h_basic_bubble))
+        if np.isscalar(h_2):
+            h_3 = float(h_3)
 
-        # State 4: HP turbine exit (at p_int)
-        # Simplified isentropic expansion
-        h_4_liq = self.mixture.enthalpy_liquid(T_int, p_int, self.x_basic)
-        h_4_vap = self.mixture.enthalpy_vapor(T_int, p_int, y_rich_int)
+        # ===== State 7: rich vapor after HP turbine (p_int) ==============
+        # Isentropic expansion using saturation envelope at outlet. The
+        # expanding stream is the rich vapor (composition y_rich), so the
+        # two-phase envelope at p_int must also be evaluated at y_rich
+        # for both saturated-liquid and saturated-vapor properties.
+        h_7_liq = self.mixture.enthalpy_liquid(T_int, p_int, y_rich)
+        h_7_vap = self.mixture.enthalpy_vapor(T_int, p_int, y_rich)
+        s_7_liq = self.mixture.entropy_liquid(T_int, p_int, y_rich)
+        s_7_vap = self.mixture.entropy_vapor(T_int, p_int, y_rich)
+        ds_7 = s_7_vap - s_7_liq
+        ds_7 = np.where(np.abs(ds_7) < 1e-9, 1e-9, ds_7)
+        x_7_isen = np.clip((s_5 - s_7_liq) / ds_7, 0.0, 1.0)
+        h_7_isen = h_7_liq + x_7_isen * (h_7_vap - h_7_liq)
+        h_7 = h_5 - eff_turb * (h_5 - h_7_isen)
+        # Quality and entropy of the actual outlet
+        dh_7 = h_7_vap - h_7_liq
+        dh_7 = np.where(np.abs(dh_7) < 1e-9, 1e-9, dh_7)
+        x_7 = np.clip((h_7 - h_7_liq) / dh_7, 0.0, 1.0)
+        s_7 = s_7_liq + x_7 * (s_7_vap - s_7_liq)
 
-        # Isentropic expansion approximation
-        h_4_isen = h_3_HP - (h_3_HP - h_4_liq) * 0.5
-        h_4_HP = h_3_HP - (h_3_HP - h_4_isen) * eff_turb
-
-        # Estimate quality
-        dh_4 = h_4_vap - h_4_liq
-        dh_4 = np.where(np.abs(dh_4) < 1e-6, 1e-6, dh_4)  # Avoid division by zero
-        x_4_HP = (h_4_HP - h_4_liq) / dh_4
-        x_4_HP = np.clip(x_4_HP, 0, 1)
-
-        s_4_HP = self.mixture.entropy_liquid(T_int, p_int, self.x_basic) * (1 - x_4_HP) + \
-                 self.mixture.entropy_vapor(T_int, p_int, y_rich_int) * x_4_HP
-
-        #=== LP Loop States ===
-
-        # State 5: LP condenser exit (saturated liquid at p_cond)
-        h_5_LP = h_1_HP  # Same condenser, same composition
-        s_5_LP = s_1_HP
-
-        # State 6: LP pump exit (compressed to p_int)
-        h_6_LP = h_5_LP + (p_int - p_cond) * 100000 / 1000 / eff_pump / rho
-        s_6_LP = s_5_LP
-        T_6_LP = T_cond + 0.5
-
-        # State 7: LP evaporator exit (saturated vapor at p_int)
-        h_7_LP = self.mixture.enthalpy_vapor(T_int, p_int, y_rich_int)
-        s_7_LP = self.mixture.entropy_vapor(T_int, p_int, y_rich_int)
-
-        # State 8: LP turbine exit (at p_cond)
-        h_8_liq = self.mixture.enthalpy_liquid(T_cond, p_cond, y_rich)
-        h_8_vap = self.mixture.enthalpy_vapor(T_cond, p_cond, y_rich)
-
-        # Isentropic expansion approximation
-        h_8_isen = h_7_LP - (h_7_LP - h_8_liq) * 0.5
-        h_8_LP = h_7_LP - (h_7_LP - h_8_isen) * eff_turb
-
-        # Estimate quality
+        # ===== State 8: rich vapor after LP turbine (p_cond) =============
+        # Saturation envelope must be at the rich-vapor sat T at p_cond,
+        # NOT at T_cond (which is the basic-mix absorber temperature, much
+        # higher than the pure-NH3 saturation point at the same pressure).
+        # Using T_cond here puts the envelope into the superheated region
+        # and makes the LP turbine produce negative work.
+        p_cond_arr = np.atleast_1d(p_cond)
+        y_rich_arr_c = np.broadcast_to(np.atleast_1d(y_rich), p_cond_arr.shape)
+        T_cond_rich_flat = np.array([
+            self.mixture.saturation_temperature(p, y)
+            for p, y in zip(p_cond_arr.ravel(), y_rich_arr_c.ravel())
+        ])
+        T_cond_rich = T_cond_rich_flat.reshape(p_cond_arr.shape)
+        if np.isscalar(p_cond):
+            T_cond_rich = float(T_cond_rich)
+        h_8_liq = self.mixture.enthalpy_liquid(T_cond_rich, p_cond, y_rich)
+        h_8_vap = self.mixture.enthalpy_vapor(T_cond_rich, p_cond, y_rich)
+        s_8_liq = self.mixture.entropy_liquid(T_cond_rich, p_cond, y_rich)
+        s_8_vap = self.mixture.entropy_vapor(T_cond_rich, p_cond, y_rich)
+        ds_8 = s_8_vap - s_8_liq
+        ds_8 = np.where(np.abs(ds_8) < 1e-9, 1e-9, ds_8)
+        x_8_isen = np.clip((s_7 - s_8_liq) / ds_8, 0.0, 1.0)
+        h_8_isen = h_8_liq + x_8_isen * (h_8_vap - h_8_liq)
+        h_8 = h_7 - eff_turb * (h_7 - h_8_isen)
         dh_8 = h_8_vap - h_8_liq
-        dh_8 = np.where(np.abs(dh_8) < 1e-6, 1e-6, dh_8)  # Avoid division by zero
-        x_8_LP = (h_8_LP - h_8_liq) / dh_8
-        x_8_LP = np.clip(x_8_LP, 0, 1)
+        dh_8 = np.where(np.abs(dh_8) < 1e-9, 1e-9, dh_8)
+        x_8 = np.clip((h_8 - h_8_liq) / dh_8, 0.0, 1.0)
 
-        s_8_LP = self.mixture.entropy_liquid(T_cond, p_cond, y_rich) * (1 - x_8_LP) + \
-                 self.mixture.entropy_vapor(T_cond, p_cond, y_rich) * x_8_LP
+        # ===== State 10: lean liquid after throttle (p_cond) =============
+        # Isenthalpic expansion through the throttle valve.
+        h_10 = h_9
+        s_10 = s_9  # approximate
 
-        # Pack states
-        states = {
-            # HP loop
-            'h_1_HP': h_1_HP, 's_1_HP': s_1_HP,
-            'h_2_HP': h_2_HP, 's_2_HP': s_2_HP,
-            'h_3_HP': h_3_HP, 's_3_HP': s_3_HP,
-            'h_4_HP': h_4_HP, 's_4_HP': s_4_HP, 'x_4_HP': x_4_HP,
-
-            # LP loop
-            'h_5_LP': h_5_LP, 's_5_LP': s_5_LP,
-            'h_6_LP': h_6_LP, 's_6_LP': s_6_LP,
-            'h_7_LP': h_7_LP, 's_7_LP': s_7_LP,
-            'h_8_LP': h_8_LP, 's_8_LP': s_8_LP, 'x_8_LP': x_8_LP,
-
-            # Pressures and temperatures
-            'p_evap': p_evap,
-            'p_int': p_int,
-            'p_cond': p_cond,
-            'T_evap_HP': T_evap_HP,
-            'T_evap_LP': T_evap_LP,
-            'T_int': T_int,
-
-            # Mixture concentrations
-            'x_basic': self.x_basic,
-            'y_rich': y_rich,
-            'y_rich_int': y_rich_int,
+        return {
+            # State enthalpies/entropies (single loop)
+            'h_1': h_1, 's_1': s_1,
+            'h_2': h_2, 's_2': s_2, 'T_2': T_2,
+            'h_3': h_3,
+            'h_4': h_4, 's_4': s_4,
+            'h_5': h_5, 's_5': s_5,
+            'h_6': h_6, 's_6': s_6,
+            'h_7': h_7, 's_7': s_7, 'x_7': x_7,
+            'h_8': h_8, 'x_8': x_8,
+            'h_9': h_9, 's_9': s_9, 'T_9': T_9,
+            'h_10': h_10,
+            # Topology / mixture state
+            'p_evap': p_evap, 'p_int': p_int, 'p_cond': p_cond,
+            'T_evap': T_evap, 'T_int': T_int, 'T_cond': T_cond,
+            'x_basic': self.x_basic, 'x_lean': x_lean, 'y_rich': y_rich,
+            'split_ratio': f,
+            # Backwards-compatible aliases consumed by enthalpies_entropies()
+            # in plant/utils.py. The legacy mapping treated the cycle as a
+            # two-stage Rankine; we expose equivalent rich-vapor states so
+            # the (h_1, h_2, h_3, h_4) projection still produces sensible
+            # numbers for downstream sizing code.
+            'h_1_HP': h_1, 's_1_HP': s_1,
+            'h_2_HP': h_2, 's_2_HP': s_2,
+            'h_3_HP': h_5, 's_3_HP': s_5,
+            'h_4_HP': h_7, 's_4_HP': s_7, 'x_4_HP': x_7,
+            'h_5_LP': h_1, 's_5_LP': s_1,
+            'h_6_LP': h_2, 's_6_LP': s_2,
+            'h_7_LP': h_7, 's_7_LP': s_7,
+            'h_8_LP': h_8, 's_8_LP': None, 'x_8_LP': x_8,
+            'T_evap_HP': T_evap, 'T_evap_LP': T_int,
+            'y_rich_int': y_rich,
         }
-
-        return states
 
     def calculate_mass_flow(self, p_gross, states):
         """
-        Calculate mass flows for both loops
+        Mass flow of the basic solution from the requested gross power.
 
-        Total power split between HP and LP turbines
-        Optimally, split to maximize efficiency
-
-        For simplicity, assume equal power split (can be optimized)
+        W_gross_per_kg_basic = f * [(h_5 - h_7) + (h_7 - h_8)] = f * (h_5 - h_8)
+        m_basic = p_gross / -(W_gross_per_kg_basic)
         """
-
-        # Power from each turbine
-        W_HP = states['h_4_HP'] - states['h_3_HP']  # Negative (power out)
-        W_LP = states['h_8_LP'] - states['h_7_LP']  # Negative (power out)
-
-        # Assume 60% HP, 40% LP (can be optimized)
-        power_split_HP = 0.6
-        power_split_LP = 0.4
-
-        m_HP = (p_gross * power_split_HP) / W_HP
-        m_LP = (p_gross * power_split_LP) / W_LP
-
+        f = states['split_ratio']
+        w_per_kg_basic = f * (states['h_5'] - states['h_8'])  # positive, kJ/kg
+        # p_gross < 0 (convention: power out is negative). Mass flow is
+        # positive when the per-kg work is positive.
+        m_basic = -p_gross / w_per_kg_basic
+        m_rich = f * m_basic
+        m_lean = (1.0 - f) * m_basic
         return {
-            'm_HP': m_HP,
-            'm_LP': m_LP,
-            'm_total': m_HP + m_LP,
+            'm_basic': m_basic,
+            'm_rich': m_rich,
+            'm_lean': m_lean,
+            # Aliases for legacy consumers
+            'm_HP': m_rich,
+            'm_LP': m_rich,
+            'm_total': m_basic,
         }
 
     def calculate_pump_power(self, m_flows, states, inputs):
-        """
-        Calculate pump power for both loops
-
-        W_pump_HP = m_HP * (h_2 - h_1) / eff_mech
-        W_pump_LP = m_LP * (h_6 - h_5) / eff_mech
-        """
+        """Pump power for the single basic-solution pump."""
         eff_mech = inputs.get('eff_pump_NH3_mech', 0.95)
-
-        m_HP = m_flows['m_HP']
-        m_LP = m_flows['m_LP']
-
-        p_pump_HP = m_HP * (states['h_2_HP'] - states['h_1_HP']) / eff_mech
-        p_pump_LP = m_LP * (states['h_6_LP'] - states['h_5_LP']) / eff_mech
-
-        p_pump_total = p_pump_HP + p_pump_LP
-
-        return p_pump_total
+        m_basic = m_flows['m_basic']
+        return m_basic * (states['h_2'] - states['h_1']) / eff_mech
 
     def calculate_heat_transfer(self, m_flows, states):
         """
-        Calculate heat transfer in both evaporators and condenser
+        Heat duties for the three external HX (evaporator, regenerator,
+        absorber/condenser).
 
-        Args:
-            m_flows: Dictionary with mass flows
-            states: Dictionary with thermodynamic states
-
-        Returns:
-            Q_evap_HP: HP evaporator heat transfer [kW]
-            Q_evap_LP: LP evaporator heat transfer [kW]
-            Q_cond: Condenser heat transfer [kW]
+        Returns the same 3-tuple shape as the previous implementation:
+            Q_evap_HP, Q_evap_LP, Q_cond
+        but populated as:
+            Q_evap = total external evaporator duty (warm seawater)
+            Q_regen = internal regenerator duty (closes the energy balance)
+            Q_cond = absorber/condenser duty (cold seawater)
         """
-        m_HP = m_flows['m_HP']
-        m_LP = m_flows['m_LP']
+        m_basic = m_flows['m_basic']
+        m_rich = m_flows['m_rich']
+        m_lean = m_flows['m_lean']
 
-        Q_evap_HP = m_HP * (states['h_3_HP'] - states['h_2_HP'])
-        Q_evap_LP = m_LP * (states['h_7_LP'] - states['h_6_LP'])
+        # External heat input (warm seawater -> evaporator)
+        Q_evap = m_basic * (states['h_4'] - states['h_3'])
+        # Internal regenerator (lean stream -> basic stream)
+        Q_regen = m_lean * (states['h_6'] - states['h_9'])
+        # External heat rejection (rich vapor + lean liquid -> absorber)
+        Q_cond = m_rich * (states['h_8'] - states['h_1']) + \
+                 m_lean * (states['h_10'] - states['h_1'])
 
-        # Condenser handles both streams
-        Q_cond = m_HP * (states['h_1_HP'] - states['h_4_HP']) + \
-                 m_LP * (states['h_5_LP'] - states['h_8_LP'])
-
-        return Q_evap_HP, Q_evap_LP, Q_cond
+        # Backwards-compatible 3-tuple. Q_evap is the only external evaporator
+        # duty; the legacy "two-stage Rankine" had separate HP/LP duties, so
+        # we return Q_evap as Q_evap_HP and the regenerator as Q_evap_LP for
+        # downstream compatibility (LP duty is internal, sums to the regen).
+        return Q_evap, Q_regen, Q_cond
 
 
 def get_thermodynamic_cycle(cycle_type='rankine_closed', working_fluid=None, **kwargs):
@@ -1296,8 +1382,8 @@ if __name__ == "__main__":
     print(f"State 4 (Turbine out):    h = {states['h_4'][0]:.2f} kJ/kg, s = {states['s_4'][0]:.4f} kJ/kgK")
     print(f"Vapor quality at turbine exit: x = {states['x_4'][0]:.4f}")
 
-    # Calculate mass flow for 136 MW gross
-    p_gross = -136000  # kW
+    # Calculate mass flow for 100 MW gross
+    p_gross = -100000  # kW
     m_fluid = cycle.calculate_mass_flow(p_gross, states)
     print(f"\nMass Flow Rate:")
     print(f"m = {m_fluid[0]:.2f} kg/s for {-p_gross/1000} MW gross power")

@@ -181,7 +181,7 @@ class CycleConfig:
 class PlantConfig:
     """OTEC plant configuration."""
 
-    gross_power: float = -136000.0      # kW (negative = power output)
+    gross_power: float = -100000.0      # kW (negative = power output)
     installation_type: Literal['onshore', 'offshore'] = 'offshore'
     optimize_depth: bool = False        # Optimize CW intake depth
 
@@ -518,7 +518,7 @@ def get_default_config(**kwargs) -> OTEXConfig:
 
 # Legacy compatibility function
 def parameters_and_constants(
-    p_gross: float = -136000,
+    p_gross: float = -100000,
     cost_level: Union[str, CostScheme] = 'low_cost',
     data: str = 'CMEMS',
     fluid_type: str = 'ammonia',

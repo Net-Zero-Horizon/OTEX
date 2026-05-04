@@ -160,7 +160,7 @@ def _run_model(
     T_WW: float,
     T_CW: float,
     param_overrides: Dict[str, float],
-    p_gross: float = -136000,
+    p_gross: float = -100000,
     cost_level: str = 'low_cost'
 ) -> Dict[str, float]:
     """
@@ -259,7 +259,7 @@ class SobolAnalysis:
         n_samples: int = 1024,
         calc_second_order: bool = False,
         config: Optional[UncertaintyConfig] = None,
-        p_gross: float = -136000,
+        p_gross: float = -100000,
         cost_level: str = 'low_cost'
     ):
         """
@@ -370,7 +370,7 @@ class TornadoAnalysis:
         T_CW: float,
         variation_pct: float = 10.0,
         config: Optional[UncertaintyConfig] = None,
-        p_gross: float = -136000,
+        p_gross: float = -100000,
         cost_level: str = 'low_cost'
     ):
         """

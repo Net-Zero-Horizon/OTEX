@@ -365,27 +365,30 @@ class AmmoniaWaterMixture:
         return float(x_mass) if is_scalar else x_mass
 
     def _P_sat_NH3(self, T_K):
-        """NH3 saturation pressure [bar] - Antoine equation"""
-        # Valid range: 230-430 K
-        A, B, C = 15.9017, 2132.5, -32.98
-        log_P_mmHg = A - B / (T_K + C)
-        P_bar = 10**(log_P_mmHg) / 750.06  # mmHg to bar
-        return P_bar
+        """NH3 saturation pressure [bar] - Antoine equation.
+
+        Uses NIST WebBook coefficients in the log10(P_bar) form. The previous
+        coefficients produced pressures off by ~5000x at OTEC temperatures
+        (e.g. P_sat(NH3, 20 C) = 48000 bar instead of ~9 bar), which broke
+        the Uehara cycle's saturation-temperature lookup.
+        """
+        # NIST: log10(P/bar) = A - B/(T_K + C), valid 239-371 K
+        A, B, C = 4.86886, 1113.928, -10.4
+        log_P_bar = A - B / (T_K + C)
+        return 10**log_P_bar
 
     def _P_sat_H2O(self, T_K):
-        """H2O saturation pressure [bar] - Antoine equation"""
-        # Valid range: 273-373 K
-        A, B, C = 16.3872, 3885.7, -42.98
-        log_P_mmHg = A - B / (T_K + C)
-        P_bar = 10**(log_P_mmHg) / 750.06  # mmHg to bar
-        return P_bar
+        """H2O saturation pressure [bar] - Antoine equation (NIST)."""
+        # NIST: log10(P/bar) = A - B/(T_K + C), valid 255-373 K
+        A, B, C = 4.6543, 1435.264, -64.848
+        log_P_bar = A - B / (T_K + C)
+        return 10**log_P_bar
 
     def _T_sat_NH3_inverse(self, P_bar):
-        """Inverse of NH3 saturation pressure (approximate)"""
-        P_mmHg = P_bar * 750.06
-        A, B, C = 15.9017, 2132.5, -32.98
-        T_K = B / (A - np.log10(P_mmHg)) - C
-        return T_K
+        """Inverse of NH3 saturation pressure (Antoine inversion)."""
+        # log10(P) = A - B/(T+C)  =>  T = B/(A - log10(P)) - C
+        A, B, C = 4.86886, 1113.928, -10.4
+        return B / (A - np.log10(P_bar)) - C
 
     def _activity_coefficients(self, x_mol, T_K):
         """

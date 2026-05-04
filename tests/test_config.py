@@ -70,7 +70,7 @@ class TestOTEXConfig:
     def test_default_config_creation(self):
         """Should create config with all default values."""
         config = OTEXConfig()
-        assert config.plant.gross_power == -136000.0
+        assert config.plant.gross_power == -100000.0
         assert config.cycle.cycle_type == 'rankine_closed'
         assert config.data.year == 2020
 
@@ -131,7 +131,7 @@ class TestParametersAndConstants:
         """Should return dict with default parameters."""
         inputs = parameters_and_constants()
 
-        assert inputs['p_gross'] == -136000
+        assert inputs['p_gross'] == -100000
         assert inputs['cost_level'] == 'low_cost'
         assert inputs['cycle_type'] == 'rankine_closed'
 

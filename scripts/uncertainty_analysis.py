@@ -50,8 +50,8 @@ def main():
                         help='Number of samples (default: 1000)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed (default: 42)')
-    parser.add_argument('--p_gross', type=float, default=-136000,
-                        help='Gross power output in kW (default: -136000)')
+    parser.add_argument('--p_gross', type=float, default=-100000,
+                        help='Gross power output in kW (default: -100000)')
     parser.add_argument('--cost_level', type=str, default='low_cost',
                         choices=['low_cost', 'high_cost'],
                         help='Cost scenario (default: low_cost)')

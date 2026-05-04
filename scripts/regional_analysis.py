@@ -30,7 +30,7 @@ from otex.plant.off_design_analysis import off_design_analysis
 
 def run_regional_analysis(
     studied_region,
-    p_gross=-136000,
+    p_gross=-100000,
     cost_level='low_cost',
     year=2020,
     cycle_type='rankine_closed',
@@ -42,7 +42,7 @@ def run_regional_analysis(
 
     Args:
         studied_region: Region name (must match entries in download_ranges_per_region.csv)
-        p_gross: Gross power output in kW (negative, e.g., -136000 for 136 MW)
+        p_gross: Gross power output in kW (negative, e.g., -100000 for 100 MW)
         cost_level: 'low_cost' or 'high_cost'
         year: Year for analysis (default: 2020)
         cycle_type: Thermodynamic cycle ('rankine_closed', 'rankine_open', 'kalina', 'uehara')
@@ -176,7 +176,7 @@ if __name__ == "__main__":
         epilog='''
 Examples:
   python regional_analysis.py Philippines
-  python regional_analysis.py Philippines --power -136000 --year 2021
+  python regional_analysis.py Philippines --power -100000 --year 2021
   python regional_analysis.py Jamaica --cycle kalina --cost high_cost
   python regional_analysis.py Hawaii --cycle rankine_closed --fluid r134a
         '''
@@ -184,8 +184,8 @@ Examples:
 
     parser.add_argument('region', nargs='?', default=None,
                         help='Region to analyze (from download_ranges_per_region.csv)')
-    parser.add_argument('--power', '-p', type=int, default=-136000,
-                        help='Gross power output in kW (negative, default: -136000)')
+    parser.add_argument('--power', '-p', type=int, default=-100000,
+                        help='Gross power output in kW (negative, default: -100000)')
     parser.add_argument('--cost', '-c', choices=['low_cost', 'high_cost'], default='low_cost',
                         help='Cost level (default: low_cost)')
     parser.add_argument('--year', '-y', type=int, default=2020,

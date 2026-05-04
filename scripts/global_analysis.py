@@ -62,7 +62,7 @@ def download_region_data(region, cost_level, year):
 
     try:
         # Initialize inputs (we just need basic params for download)
-        p_gross = -136000  # kW (136 MW)
+        p_gross = -100000  # kW (100 MW)
 
         inputs = parameters_and_constants(
             p_gross=p_gross,
@@ -84,7 +84,8 @@ def download_region_data(region, cost_level, year):
         files = download_data(cost_level, inputs, region, new_path)
 
         # Load sites and process data to create .h5 files
-        sites_df = pd.read_csv('CMEMS_points_with_properties.csv', delimiter=';')
+        from otex.data.resources import load_sites
+        sites_df = load_sites()
         sites_df = sites_df[(sites_df['region'] == region) &
                            (sites_df['water_depth'] <= inputs['min_depth']) &
                            (sites_df['water_depth'] >= inputs['max_depth'])]
@@ -145,7 +146,7 @@ def process_single_region_config(region, config, cost_level, year):
 
     try:
         # Initialize inputs for this region/config
-        p_gross = -136000  # kW (136 MW)
+        p_gross = -100000  # kW (100 MW)
 
         inputs = parameters_and_constants(
             p_gross=p_gross,
@@ -162,7 +163,8 @@ def process_single_region_config(region, config, cost_level, year):
         new_path = f'Data_Results/{region.replace(" ", "_")}/'
 
         # Load sites from CSV
-        sites_df = pd.read_csv('CMEMS_points_with_properties.csv', delimiter=';')
+        from otex.data.resources import load_sites
+        sites_df = load_sites()
         sites_df = sites_df[(sites_df['region'] == region) &
                            (sites_df['water_depth'] <= inputs['min_depth']) &
                            (sites_df['water_depth'] >= inputs['max_depth'])]
@@ -295,7 +297,7 @@ def process_configuration_parallel(config, regions_to_analyze, cost_level, year,
     for region in regions_to_analyze:
         try:
             # Initialize inputs for this region/config
-            p_gross = -136000  # kW (136 MW)
+            p_gross = -100000  # kW (100 MW)
 
             inputs = parameters_and_constants(
                 p_gross=p_gross,
@@ -315,8 +317,9 @@ def process_configuration_parallel(config, regions_to_analyze, cost_level, year,
             # Download CMEMS data
             files = download_data(cost_level, inputs, region, new_path)
 
-            # Load sites from CSV
-            sites_df = pd.read_csv('CMEMS_points_with_properties.csv', delimiter=';')
+            # Load sites from bundled package data
+            from otex.data.resources import load_sites
+            sites_df = load_sites()
             sites_df = sites_df[(sites_df['region'] == region) &
                                (sites_df['water_depth'] <= inputs['min_depth']) &
                                (sites_df['water_depth'] >= inputs['max_depth'])]
@@ -536,7 +539,8 @@ class GlobalOTECCMEMSAnalysis:
         """
         print("\nLoading regions from download_ranges_per_region.csv...")
 
-        self.regions_df = pd.read_csv('download_ranges_per_region.csv', delimiter=';')
+        from otex.data.resources import load_regions
+        self.regions_df = load_regions()
 
         # Filter out regions with invalid demand (NaN or #N/A)
         # Keep all regions for analysis regardless of demand
@@ -632,7 +636,7 @@ class GlobalOTECCMEMSAnalysis:
             print(f"    Initializing parameters...", flush=True)
 
             # Initialize inputs
-            p_gross = -136000  # kW (136 MW)
+            p_gross = -100000  # kW (100 MW)
 
             inputs = parameters_and_constants(
                 p_gross=p_gross,
@@ -673,9 +677,10 @@ class GlobalOTECCMEMSAnalysis:
             sys.stderr.write(f"[DEBUG] Print completed\n")
             sys.stderr.flush()
             try:
-                # Load sites from CSV
+                # Load sites from bundled package data
                 print(f"    Loading sites CSV...", flush=True)
-                sites_df = pd.read_csv('CMEMS_points_with_properties.csv', delimiter=';')
+                from otex.data.resources import load_sites
+                sites_df = load_sites()
                 print(f"    CSV loaded ({len(sites_df)} rows). Filtering...", flush=True)
                 sites_df = sites_df[(sites_df['region'] == region_name) &
                                    (sites_df['water_depth'] <= inputs['min_depth']) &
@@ -1226,7 +1231,7 @@ def main():
     # Create analysis object
     analysis = GlobalOTECCMEMSAnalysis(
         output_dir='./Global_OTEC_CMEMS/',
-        year=2020  # Use 2020 data
+        year=2023  # Use 2023 data
     )
 
     # For testing: analyze a subset of regions

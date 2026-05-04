@@ -227,7 +227,7 @@ class MonteCarloAnalysis:
         T_WW: float,
         T_CW: float,
         config: Optional[UncertaintyConfig] = None,
-        p_gross: float = -136000,
+        p_gross: float = -100000,
         cost_level: str = 'low_cost'
     ):
         """

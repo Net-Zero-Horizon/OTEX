@@ -304,7 +304,7 @@ def download_region_data_comparison(region, cost_level, year):
 
     try:
         # Initialize inputs
-        p_gross = -136000  # kW (136 MW)
+        p_gross = -100000  # kW (100 MW)
         inputs = parameters_and_constants(
             p_gross=p_gross,
             cost_level=cost_level,
@@ -388,7 +388,7 @@ def run_single_analysis(region, config, installation_type, cost_level, year):
 
     try:
         # Initialize inputs
-        p_gross = -136000  # kW (136 MW)
+        p_gross = -100000  # kW (100 MW)
 
         # Get fluid and cycle type strings for unique file naming
         fluid_type_str = config['fluid_config']['type'] if config['fluid_config'] else 'seawater'
