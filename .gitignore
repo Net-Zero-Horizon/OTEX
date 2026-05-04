@@ -72,6 +72,10 @@ venv.bak/
 *.nc
 *.hdf5
 Data_Results/
+# ...except the small bundled reference CSVs that ship with the package.
+# Without these the wheel is unusable (region database + CMEMS site list).
+!otex/data/CMEMS_points_with_properties.csv
+!otex/data/download_ranges_per_region.csv
 
 # OS files
 .DS_Store

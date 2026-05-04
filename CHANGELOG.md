@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4.2] - 2026-05-04
+
+### Fixed
+- The bundled reference CSVs were ignored by `.gitignore` (`*.csv`),
+  so they were never tracked in git and consequently absent from CI
+  builds even after the `package-data` rule was corrected in 0.1.4.1.
+  The wheel now actually contains them.
+
 ## [0.1.4.1] - 2026-05-04
 
 ### Fixed
