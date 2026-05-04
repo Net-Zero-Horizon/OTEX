@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4.1] - 2026-05-04
+
+### Fixed
+- Bundled CSV data files (`download_ranges_per_region.csv`,
+  `CMEMS_points_with_properties.csv`) were missing from every wheel
+  since 0.1.0 because the `package-data` rule was declared on the
+  `otex` package instead of the `otex.data` sub-package. Loading the
+  region database from a pip-installed copy now works.
+
 ## [0.1.4] - 2026-05-04
 
 ### Fixed

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "otex"
-version = "0.1.4"
+version = "0.1.4.1"
 description = "OTEX - Ocean Thermal Energy eXchange: OTEC plant design, simulation, and analysis"
 readme = "README.md"
 license = {text = "MIT"}
@@ -96,7 +96,12 @@ include = ["otex*"]
 exclude = ["tests*", "scripts*"]
 
 [tool.setuptools.package-data]
-otex = ["py.typed", "data/*.csv"]
+# `otex.data` is a sub-package (has __init__.py), so the CSV data files
+# must be declared under that package name, not under `otex`. Declaring
+# them under `otex` (as `data/*.csv`) silently produced wheels with no
+# CSVs at all in 0.1.0 - 0.1.4.
+otex = ["py.typed"]
+"otex.data" = ["*.csv"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
