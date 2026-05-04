@@ -272,9 +272,10 @@ class AmmoniaWaterMixture:
         # Convert to mass fraction
         y_vapor = self._mole_to_mass_fraction(y_NH3_mol)
 
-        # Return scalar if original input was scalar
+        # Return scalar if original input was scalar. NumPy 2.x rejects
+        # `float()` on 1-D arrays, so use `.item()` via np.asarray.
         if original_shape == (1,) and np.isscalar(T):
-            return float(y_vapor) if hasattr(y_vapor, '__len__') else y_vapor
+            return float(np.asarray(y_vapor).reshape(-1)[0])
 
         return y_vapor
 
