@@ -483,8 +483,8 @@ class TestCyclePumpPowerConvention:
             "rho_NH3": 640, "eff_pump_NH3_mech": 0.95, "p_gross": -100000,
             "T_pinch_WW": 1.0,
         }
-        p_evap = float(nh3.saturation_pressure(24.0))
-        p_cond = float(nh3.saturation_pressure(9.0))
+        p_evap = float(np.asarray(nh3.saturation_pressure(24.0)).reshape(-1)[0])
+        p_cond = float(np.asarray(nh3.saturation_pressure(9.0)).reshape(-1)[0])
         s = c.calculate_cycle_states(24.0, 9.0, p_evap, p_cond, inputs)
         m = c.calculate_mass_flow(-100000, s)
         W_pump = float(np.atleast_1d(c.calculate_pump_power(m, s, inputs))[0])

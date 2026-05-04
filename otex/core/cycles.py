@@ -18,6 +18,19 @@ from abc import ABC, abstractmethod
 from .fluids import WorkingFluid
 
 
+def _to_scalar(x):
+    """Coerce a 0-d or single-element array to a Python float.
+
+    NumPy >= 2.0 raises ``TypeError`` for ``float(arr)`` when ``arr.ndim > 0``,
+    even for 1-element arrays (was a deprecation warning since NumPy 1.25).
+    Use this helper anywhere we want a scalar regardless of input ndim.
+    """
+    arr = np.asarray(x)
+    if arr.size == 0:
+        return float("nan")
+    return float(arr.reshape(-1)[0])
+
+
 class ThermodynamicCycle(ABC):
     """
     Abstract base class for thermodynamic power cycles
@@ -576,7 +589,7 @@ class KalinaCycle(ThermodynamicCycle):
         # Cold-end approach: lean exit ≥ basic inlet to the recuperator.
         T_8 = T_2 + dT_app_regen
         T_8_arr = np.minimum(np.atleast_1d(T_8), np.atleast_1d(T_evap))
-        T_8 = float(T_8_arr) if np.isscalar(T_2) else T_8_arr
+        T_8 = _to_scalar(T_8_arr) if np.isscalar(T_2) else T_8_arr
         h_8 = self.mixture.enthalpy_liquid(T_8, p_evap, x_lean)
         s_8 = self.mixture.entropy_liquid(T_8, p_evap, x_lean)
 
@@ -589,7 +602,7 @@ class KalinaCycle(ThermodynamicCycle):
         h_basic_bubble = self.mixture.enthalpy_liquid(T_evap, p_evap, self.x_basic)
         h_3 = np.minimum(np.atleast_1d(h_3), np.atleast_1d(h_basic_bubble))
         if np.isscalar(h_2):
-            h_3 = float(h_3)
+            h_3 = _to_scalar(h_3)
 
         # ===== State 7: rich vapor after turbine (p_cond, two-phase) ======
         # Isentropic expansion from state 5 to p_cond using the rich-vapor
@@ -602,7 +615,7 @@ class KalinaCycle(ThermodynamicCycle):
         ])
         T_cond_rich = T_cond_rich_flat.reshape(p_cond_arr.shape)
         if np.isscalar(p_cond):
-            T_cond_rich = float(T_cond_rich)
+            T_cond_rich = _to_scalar(T_cond_rich)
         h_7_liq = self.mixture.enthalpy_liquid(T_cond_rich, p_cond, y_rich)
         h_7_vap = self.mixture.enthalpy_vapor(T_cond_rich, p_cond, y_rich)
         s_7_liq = self.mixture.entropy_liquid(T_cond_rich, p_cond, y_rich)
@@ -1097,7 +1110,7 @@ class UeharaCycle(ThermodynamicCycle):
         ])
         T_int = T_int_flat.reshape(p_int_arr.shape)
         if np.isscalar(p_int):
-            T_int = float(T_int)
+            T_int = _to_scalar(T_int)
 
         # ===== State 1: basic liquid out of absorber (p_cond, x_basic) =====
         h_1 = self.mixture.enthalpy_liquid(T_cond, p_cond, self.x_basic)
@@ -1130,7 +1143,7 @@ class UeharaCycle(ThermodynamicCycle):
         # Cap at T_6 (cannot cool below... wait, lean is cooling, T_9 < T_6;
         # cap at the source temperature only as a sanity guard).
         T_9_arr = np.minimum(np.atleast_1d(T_9), np.atleast_1d(T_evap))
-        T_9 = float(T_9_arr) if np.isscalar(T_2) else T_9_arr
+        T_9 = _to_scalar(T_9_arr) if np.isscalar(T_2) else T_9_arr
         h_9 = self.mixture.enthalpy_liquid(T_9, p_evap, x_lean)
         s_9 = self.mixture.entropy_liquid(T_9, p_evap, x_lean)
 
@@ -1146,7 +1159,7 @@ class UeharaCycle(ThermodynamicCycle):
         h_basic_bubble = self.mixture.enthalpy_liquid(T_evap, p_evap, self.x_basic)
         h_3 = np.minimum(np.atleast_1d(h_3), np.atleast_1d(h_basic_bubble))
         if np.isscalar(h_2):
-            h_3 = float(h_3)
+            h_3 = _to_scalar(h_3)
 
         # ===== State 7: rich vapor after HP turbine (p_int) ==============
         # Isentropic expansion using saturation envelope at outlet. The
@@ -1182,7 +1195,7 @@ class UeharaCycle(ThermodynamicCycle):
         ])
         T_cond_rich = T_cond_rich_flat.reshape(p_cond_arr.shape)
         if np.isscalar(p_cond):
-            T_cond_rich = float(T_cond_rich)
+            T_cond_rich = _to_scalar(T_cond_rich)
         h_8_liq = self.mixture.enthalpy_liquid(T_cond_rich, p_cond, y_rich)
         h_8_vap = self.mixture.enthalpy_vapor(T_cond_rich, p_cond, y_rich)
         s_8_liq = self.mixture.entropy_liquid(T_cond_rich, p_cond, y_rich)
