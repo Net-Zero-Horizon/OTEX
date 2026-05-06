@@ -43,6 +43,16 @@ dependencies = [
     "xarray>=0.19",
     "netCDF4>=1.5",
     "tqdm>=4.60",
+    # On-demand region/site catalogs (0.2.0+): shapely / geopandas /
+    # pyproj are required to resolve Natural Earth admin-0 boundaries
+    # and to compute distance-to-shore. Promoted from the optional
+    # `siting` extra to core dependencies because they are now used by
+    # the default regional analysis path.
+    "geopandas>=0.12",
+    "shapely>=2.0",
+    "pyproj>=3.4",
+    "requests>=2.28",
+    "pyarrow>=10.0",
 ]
 
 [project.optional-dependencies]

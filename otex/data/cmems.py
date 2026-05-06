@@ -20,9 +20,16 @@ import datetime
 import os
 import re
 import time as _time_module  # Avoid conflicts with numpy
-import copernicusmarine
 import threading
 from collections import defaultdict
+
+# copernicusmarine is only required for ``download_data`` (the actual
+# CMEMS subset request). All the other helpers in this module — the
+# multi-year loader, data_processing, load_temperatures — work with
+# already-downloaded NetCDFs and do not need the SDK installed. Import
+# it lazily so that environments without copernicusmarine (CI, users
+# of the analysis-only path) can still import otex.data.cmems freely.
+copernicusmarine = None  # populated on first call to download_data
 
 # For file locking: use fcntl on Unix/Linux, msvcrt on Windows
 if sys.platform == 'win32':
@@ -80,6 +87,10 @@ def unlock_file(file_handle):
 
 
 def download_data(cost_level,inputs,studied_region,new_path):
+    global copernicusmarine
+    if copernicusmarine is None:
+        import copernicusmarine as _cm
+        copernicusmarine = _cm
 
     ## Region geometry is resolved on demand from Natural Earth admin-0
     ## boundaries (since 0.2.0). For OTEC we extend the country's tight
