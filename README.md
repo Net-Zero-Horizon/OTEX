@@ -89,6 +89,10 @@ OTEX enables researchers and engineers to:
 
 ### Analysis Capabilities
 - **Regional Analysis**: Site-specific LCOE maps and power profiles
+- **Multi-year Simulations** *(0.2.0)*: Run a continuous N-year simulation
+  with NPV-based LCOE, configurable degradation (constant / logistic /
+  step), and OPEX escalation (flat / fixed-rate / indexed). Inter-annual
+  variability of AEP is reported per site.
 - **Site Screening**: Optional exclusion of protected areas (WDPA) and busy shipping lanes (World Bank vessel density), plus seismic and cyclone risk-based cost multipliers (GEM PGA, NOAA IBTrACS)
 - **Uncertainty Analysis**: Monte Carlo with Latin Hypercube Sampling
 - **Sensitivity Analysis**: Sobol indices and Tornado diagrams
@@ -136,7 +140,8 @@ from otex.regional import run_regional_analysis
 otec_plants, sites = run_regional_analysis(
     studied_region='Jamaica',
     data_source='HYCOM',
-    year=2020,
+    year_start=2020,
+    year_end=2020,
 )
 ```
 
@@ -163,7 +168,8 @@ inputs = parameters_and_constants(
     cost_level='low_cost',
     cycle_type='rankine_closed',
     fluid_type='ammonia',
-    year=2020
+    year_start=2020,
+    year_end=2020,
 )
 
 print(f"Cycle: {inputs['cycle_type']}")
@@ -182,6 +188,30 @@ otex-regional Philippines --year 2020 --data-source HYCOM
 
 # Analyze with Kalina cycle
 otex-regional Philippines --cycle kalina --year 2021
+```
+
+### Multi-Year Analysis
+
+Since 0.2.0, a single run can span multiple calendar years. The
+oceanographic data is concatenated along the time axis, LCOE is computed
+via discounted cashflow NPV (with configurable degradation and OPEX
+escalation), and the output CSV includes inter-annual AEP statistics:
+
+```bash
+# Continuous 4-year simulation, NPV LCOE, inter-annual AEP variability
+otex-regional Jamaica --year-start 2020 --year-end 2023
+```
+
+```python
+from otex.regional import run_regional_analysis
+
+otec_plants, sites = run_regional_analysis(
+    studied_region='Jamaica',
+    year_start=2020,
+    year_end=2023,
+)
+# sites includes columns: LCOE (NPV), LCOE_legacy (CRF), AEP_min/p50/max/std
+# A second CSV `OTEC_sites_yearly_*.csv` reports per-(site, year) energy.
 ```
 
 ### Uncertainty Analysis

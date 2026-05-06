@@ -250,7 +250,9 @@ def off_design_analysis(T_WW_design,T_CW_design,T_WW_profiles,T_CW_profiles,inpu
     net_power_df['Time'] = timestamp
     net_power_df = net_power_df.set_index('Time')
     
-    date_start = inputs['date_start']
+    # Use the multi-year label (e.g. '2020-2022') if present; fall back to the
+    # 4-character year extracted from date_start for legacy single-year runs.
+    year_label = inputs.get('year_label') or inputs['date_start'][0:4]
     p_gross = inputs['p_gross']
 
     # Generate unique filename including configuration info to avoid parallel write conflicts
@@ -289,7 +291,7 @@ def off_design_analysis(T_WW_design,T_CW_design,T_WW_profiles,T_CW_profiles,inpu
     # NOTE: new_path already contains the directory path with slashes - don't sanitize it!
     # Format: Time_series_data_{region}_{cycle}_{fluid}_{installation}_{year}_{power}_MW_{cost}.h5
     config_str = f"{cycle_safe}_{fluid_safe}_{install_safe}"
-    filename = f'Time_series_data_{region_safe}_{config_str}_{date_start[0:4]}_{-p_gross/1000}_MW_{cost_level}.h5'
+    filename = f'Time_series_data_{region_safe}_{config_str}_{year_label}_{-p_gross/1000}_MW_{cost_level}.h5'
     filepath = new_path + filename
 
     # Write time series data with retry logic for parallel execution

@@ -157,7 +157,8 @@ from otex.regional import run_regional_analysis
 otec_plants, sites = run_regional_analysis(
     studied_region='Jamaica',
     data_source='HYCOM',
-    year=2020,
+    year_start=2020,
+    year_end=2020,
 )
 ```
 
@@ -335,7 +336,8 @@ pip install --force-reinstall h5py netCDF4
 
 4. **Alternative:** Try HYCOM instead (no credentials needed):
    ```python
-   run_regional_analysis(studied_region='Jamaica', data_source='HYCOM', year=2020)
+   run_regional_analysis(studied_region='Jamaica', data_source='HYCOM',
+                         year_start=2020, year_end=2020)
    ```
 
 #### HYCOM Download Errors

@@ -39,7 +39,9 @@ def run_regional_analysis(
     studied_region,
     p_gross=-100000,
     cost_level='low_cost',
-    year=2020,
+    year=None,
+    year_start=None,
+    year_end=None,
     cycle_type='rankine_closed',
     fluid_type='ammonia',
     use_coolprop=True,
@@ -59,7 +61,10 @@ def run_regional_analysis(
             Use ``otex.data.load_regions()`` to list available regions.
         p_gross: Gross power output in kW (negative, e.g., -100000 for 100 MW).
         cost_level: Cost assumption, either ``'low_cost'`` or ``'high_cost'``.
-        year: Year for analysis (default: 2020).
+        year: Single calendar year (deprecated; use year_start/year_end).
+        year_start: First simulated year (inclusive). Defaults to 2020 if
+            neither year nor year_start is provided.
+        year_end: Last simulated year (inclusive). Defaults to year_start.
         cycle_type: Thermodynamic cycle. One of ``'rankine_closed'``,
             ``'rankine_open'``, ``'rankine_hybrid'``, ``'kalina'``, ``'uehara'``.
         fluid_type: Working fluid. One of ``'ammonia'``, ``'r134a'``,
@@ -78,6 +83,9 @@ def run_regional_analysis(
     if output_dir is None:
         output_dir = os.path.join(os.getcwd(), "Data_Results")
 
+    if year is None and year_start is None:
+        year_start = 2020
+
     inputs = parameters_and_constants(
         p_gross=p_gross,
         cost_level=cost_level,
@@ -86,8 +94,10 @@ def run_regional_analysis(
         cycle_type=cycle_type,
         use_coolprop=use_coolprop,
         year=year,
+        year_start=year_start,
+        year_end=year_end,
     )
-    year_str = str(year)
+    year_str = inputs['year_label']
 
     region_dir = os.path.join(output_dir, studied_region.replace(" ", "_"))
     run_dir = os.path.join(
@@ -108,10 +118,20 @@ def run_regional_analysis(
 
     print('\n++ Processing seawater temperature data ++\n')
 
-    sites_df = load_sites()
+    # Sites are now built on demand for the requested region (since
+    # 0.2.0). The legacy bundled CSV is gone; the depth filter is applied
+    # by build_sites itself, but we re-apply the inputs-derived bounds
+    # here for full back-compat with downstream filtering.
+    sites_df = load_sites(
+        studied_region,
+        # inputs['min_depth'] / ['max_depth'] are stored as negative
+        # elevations, so we flip the sign for build_sites' positive-
+        # depth API.
+        min_depth=abs(inputs['min_depth']),
+        max_depth=abs(inputs['max_depth']),
+    )
     sites_df = sites_df[
-        (sites_df['region'] == studied_region)
-        & (sites_df['water_depth'] <= inputs['min_depth'])
+        (sites_df['water_depth'] <= inputs['min_depth'])
         & (sites_df['water_depth'] >= inputs['max_depth'])
     ]
     sites_df = sites_df.sort_values(by=['longitude', 'latitude'], ascending=True)
@@ -188,14 +208,53 @@ def run_regional_analysis(
         inputs, coordinates_CW, timestamp, studied_region, run_dir + os.sep, cost_level,
     )
 
+    # ── Multi-year aggregations ────────────────────────────────────────
+    # Always compute per-year mean power and annual energy. For multi-year
+    # runs we additionally recompute LCOE via the NPV formulation so that
+    # degradation, leap years, and OPEX escalation are reflected. Single-
+    # year runs keep the legacy LCOE from off_design_analysis.
+    from otex.economics.timeseries import (
+        aggregate_p_net_by_year, annual_energy_kwh,
+    )
+
+    p_net_by_year, sim_years = aggregate_p_net_by_year(
+        otec_plants['p_net'], timestamp
+    )
+    annual_energy_MWh = (
+        annual_energy_kwh(
+            p_net_by_year, sim_years, inputs['availability_factor']
+        ) / 1000.0
+    )  # shape (n_years, n_sites)
+
+    if inputs['n_years'] > 1:
+        from otex.economics.costs import lcoe_npv
+        # Preserve the legacy single-year LCOE for transparency/comparison.
+        otec_plants['LCOE_legacy'] = otec_plants['LCOE']
+        otec_plants['LCOE'] = lcoe_npv(
+            otec_plants, inputs, p_net_by_year, sim_years
+        )
+        otec_plants['p_net_by_year'] = p_net_by_year
+        otec_plants['annual_energy_MWh'] = annual_energy_MWh
+        otec_plants['simulated_years'] = sim_years
+
     sites = pd.DataFrame()
     sites.index = np.squeeze(id_sites)
     sites['longitude'] = coordinates_CW[:, 0]
     sites['latitude'] = coordinates_CW[:, 1]
     sites['p_net_nom'] = -otec_plants['p_net_nom'].T / 1000
-    sites['AEP'] = -np.nanmean(otec_plants['p_net'], axis=0) * 8760 / 1_000_000
+    # AEP: lifetime-average annual energy (MWh). For multi-year runs this
+    # is the mean of per-year energies; for single-year runs it equals the
+    # year's energy. Leap years are accounted for via annual_energy_MWh.
+    sites['AEP'] = annual_energy_MWh.mean(axis=0)
     sites['CAPEX'] = otec_plants['CAPEX'].T / 1_000_000
     sites['LCOE'] = otec_plants['LCOE'].T
+    if inputs['n_years'] > 1:
+        sites['LCOE_legacy'] = otec_plants['LCOE_legacy'].T
+        # Inter-annual variability of AEP (MWh).
+        sites['AEP_min']  = annual_energy_MWh.min(axis=0)
+        sites['AEP_p50']  = np.median(annual_energy_MWh, axis=0)
+        sites['AEP_max']  = annual_energy_MWh.max(axis=0)
+        sites['AEP_std']  = annual_energy_MWh.std(axis=0, ddof=0)
     sites['Configuration'] = otec_plants['Configuration'].T
     sites['T_WW_min'] = T_WW_design[0, :]
     sites['T_WW_med'] = T_WW_design[1, :]
@@ -219,6 +278,31 @@ def run_regional_analysis(
         index=True, sep=';',
     )
 
+    # Multi-year per-year breakdown: one row per (site, year). Only emitted
+    # when the run actually spans more than one year.
+    if inputs['n_years'] > 1:
+        valid_ids = sites.index.to_numpy()
+        valid_mask = np.isin(np.squeeze(id_sites).astype(np.int64), valid_ids)
+        per_year_rows = []
+        for yi, year in enumerate(sim_years):
+            for si, site_id in enumerate(np.squeeze(id_sites).astype(np.int64)):
+                if not valid_mask[si]:
+                    continue
+                per_year_rows.append({
+                    'id': int(site_id),
+                    'year': int(year),
+                    'p_net_mean_kW': -p_net_by_year[yi, si],
+                    'AEP_MWh': annual_energy_MWh[yi, si],
+                })
+        per_year_df = pd.DataFrame(per_year_rows)
+        per_year_df.to_csv(
+            os.path.join(
+                run_dir,
+                f'OTEC_sites_yearly_{studied_region}_{year_str}_{-p_gross_val/1000}_MW_{cost_level}.csv'.replace(" ", "_"),
+            ),
+            index=False, float_format='%.3f', sep=';',
+        )
+
     end = time.time()
     print(f'Total runtime: {(end - start) / 60:.2f} minutes.')
 
@@ -236,6 +320,7 @@ def main():
 Examples:
   otex-regional Philippines
   otex-regional Philippines --power -100000 --year 2021
+  otex-regional Philippines --year-start 2020 --year-end 2022
   otex-regional Jamaica --cycle kalina --cost high_cost
   otex-regional Jamaica --data-source HYCOM --year 2020
   otex-regional Hawaii --cycle rankine_closed --fluid r134a
@@ -248,8 +333,12 @@ Examples:
                         help='Gross power output in kW (negative, default: -100000)')
     parser.add_argument('--cost', '-c', choices=['low_cost', 'high_cost'], default='low_cost',
                         help='Cost level (default: low_cost)')
-    parser.add_argument('--year', '-y', type=int, default=2020,
-                        help='Year for analysis (default: 2020)')
+    parser.add_argument('--year', '-y', type=int, default=None,
+                        help='Single year for analysis (deprecated; use --year-start/--year-end)')
+    parser.add_argument('--year-start', type=int, default=None,
+                        help='First simulated year, inclusive (defaults to 2020)')
+    parser.add_argument('--year-end', type=int, default=None,
+                        help='Last simulated year, inclusive (defaults to year-start)')
     parser.add_argument('--cycle', choices=['rankine_closed', 'rankine_open', 'rankine_hybrid', 'kalina', 'uehara'],
                         default='rankine_closed',
                         help='Thermodynamic cycle (default: rankine_closed)')
@@ -269,10 +358,19 @@ Examples:
         print('++ Setting up seawater temperature data download ++\n')
         args.region = input('Enter the region to be analysed: ')
 
+    if args.year is None and args.year_start is None:
+        # Preserve historical default for unflagged invocations.
+        args.year_start = 2020
+    year_label = (
+        str(args.year) if args.year is not None
+        else (f'{args.year_start}-{args.year_end}' if args.year_end and args.year_end != args.year_start
+              else str(args.year_start))
+    )
+
     print(f'\n++ OTEX Regional Analysis ++')
     print(f'Region: {args.region}')
     print(f'Power: {args.power} kW ({-args.power/1000:.1f} MW)')
-    print(f'Year: {args.year}')
+    print(f'Years: {year_label}')
     print(f'Cycle: {args.cycle}')
     print(f'Fluid: {args.fluid}')
     print(f'Cost level: {args.cost}')
@@ -284,6 +382,8 @@ Examples:
         p_gross=args.power,
         cost_level=args.cost,
         year=args.year,
+        year_start=args.year_start,
+        year_end=args.year_end,
         cycle_type=args.cycle,
         fluid_type=args.fluid,
         use_coolprop=not args.no_coolprop,

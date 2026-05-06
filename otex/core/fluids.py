@@ -219,69 +219,65 @@ class CoolPropFluid(WorkingFluid):
         self.molecular_weight = CP.PropsSI('M', self.coolprop_name) * 1000  # kg/kmol
 
     def _vectorize_coolprop(self, prop, input1_name, input1_val, input2_name, input2_val):
-        """Helper to vectorize CoolProp calls which don't support arrays natively"""
+        """Vectorized CoolProp ``PropsSI`` call.
+
+        CoolProp >= 7.x accepts 1-D numpy arrays directly for either input
+        and does the iteration in C. Earlier OTEX versions used a Python
+        list comprehension here, which dominated runtime for multi-year
+        runs (millions of single-element calls). This implementation
+        flattens N-D inputs before the call and restores the original
+        shape afterwards.
+
+        NOTE: callers must mask out NaN values before invoking this
+        function. CoolProp 7.2.0 segfaults when its vectorised PropsSI
+        receives NaN input. All current callers in this module already
+        do that masking.
+        """
         input1_arr = np.atleast_1d(input1_val)
         input2_arr = np.atleast_1d(input2_val)
 
-        # Store original shape to restore later
-        original_shape = None
-        if input1_arr.size > 1:
+        # Determine the output shape. When one input is broadcast against
+        # the other, the non-scalar shape wins. When both are arrays they
+        # must already have matching shapes (CoolProp does element-wise).
+        if input1_arr.size > 1 and input2_arr.size > 1:
+            if input1_arr.shape != input2_arr.shape:
+                raise ValueError(
+                    f"Shape mismatch in _vectorize_coolprop: "
+                    f"{input1_arr.shape} vs {input2_arr.shape}"
+                )
+            original_shape = input1_arr.shape
+        elif input1_arr.size > 1:
             original_shape = input1_arr.shape
         elif input2_arr.size > 1:
             original_shape = input2_arr.shape
-
-        # Convert numpy types to Python scalars
-        def to_scalar(val):
-            # Handle numpy arrays, scalars, and Python numbers
-            if isinstance(val, np.ndarray):
-                if val.size == 1:
-                    return float(val.flat[0])
-                else:
-                    raise ValueError(f"Expected scalar, got array of size {val.size}")
-            elif hasattr(val, 'item'):
-                return float(val.item())
-            else:
-                return float(val)
-
-        if input1_arr.size == 1 and input2_arr.size == 1:
-            return CP.PropsSI(prop, input1_name, to_scalar(input1_arr[0]),
-                            input2_name, to_scalar(input2_arr[0]), self.coolprop_name)
-        elif input1_arr.size == 1:
-            # input1 is scalar, input2 is array
-            scalar1 = to_scalar(input1_arr[0])
-            # Flatten input2 to ensure proper iteration
-            input2_flat = input2_arr.flatten()
-            result = np.array([CP.PropsSI(prop, input1_name, scalar1,
-                                        input2_name, to_scalar(val2), self.coolprop_name)
-                            for val2 in input2_flat])
-            # Restore original shape
-            if original_shape is not None:
-                result = result.reshape(original_shape)
-            return result
-        elif input2_arr.size == 1:
-            # input2 is scalar, input1 is array
-            scalar2 = to_scalar(input2_arr[0])
-            # Flatten input1 to ensure proper iteration
-            input1_flat = input1_arr.flatten()
-            result = np.array([CP.PropsSI(prop, input1_name, to_scalar(val1),
-                                        input2_name, scalar2, self.coolprop_name)
-                            for val1 in input1_flat])
-            # Restore original shape
-            if original_shape is not None:
-                result = result.reshape(original_shape)
-            return result
         else:
-            # Both are arrays - element-wise operation
-            # Flatten both arrays to ensure proper iteration
-            input1_flat = input1_arr.flatten()
-            input2_flat = input2_arr.flatten()
-            result = np.array([CP.PropsSI(prop, input1_name, to_scalar(val1),
-                                        input2_name, to_scalar(val2), self.coolprop_name)
-                            for val1, val2 in zip(input1_flat, input2_flat)])
-            # Restore original shape
-            if original_shape is not None:
-                result = result.reshape(original_shape)
-            return result
+            # Both scalar: return a Python float for backward compatibility.
+            return CP.PropsSI(
+                prop,
+                input1_name, float(input1_arr.flat[0]),
+                input2_name, float(input2_arr.flat[0]),
+                self.coolprop_name,
+            )
+
+        # Empty input → empty output (no CoolProp call).
+        if input1_arr.size == 0 or input2_arr.size == 0:
+            return np.empty(original_shape, dtype=np.float64)
+
+        # CoolProp.PropsSI requires 1-D inputs; flatten and reshape back.
+        # When one input is scalar pass it as a Python float (broadcast).
+        if input1_arr.size == 1:
+            arg1 = float(input1_arr.flat[0])
+        else:
+            arg1 = input1_arr.ravel()
+        if input2_arr.size == 1:
+            arg2 = float(input2_arr.flat[0])
+        else:
+            arg2 = input2_arr.ravel()
+
+        result = CP.PropsSI(
+            prop, input1_name, arg1, input2_name, arg2, self.coolprop_name
+        )
+        return np.asarray(result).reshape(original_shape)
 
     def saturation_pressure(self, T):
         """Temperature in Celsius, returns pressure in bar"""

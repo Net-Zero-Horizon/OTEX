@@ -3,6 +3,8 @@
 Tests for otex.config module.
 """
 
+import warnings
+
 import pytest
 from otex.config import (
     OTEXConfig,
@@ -12,6 +14,8 @@ from otex.config import (
     Economics,
     parameters_and_constants,
     get_default_config,
+    hours_in_year,
+    hours_in_span,
 )
 
 
@@ -197,3 +201,90 @@ class TestGetDefaultConfig:
         """Gross power alias should work."""
         config = get_default_config(gross_power=-50000)
         assert config.plant.gross_power == -50000
+
+
+class TestMultiYearConfig:
+    """Tests for multi-year simulation configuration (added in 0.2.0)."""
+
+    def test_default_is_single_year(self):
+        config = DataConfig()
+        assert config.year_start == 2020
+        assert config.year_end == 2020
+        assert config.n_years == 1
+        assert config.years == [2020]
+        assert config.year_label == '2020'
+
+    def test_multi_year_range(self):
+        config = DataConfig(year_start=2020, year_end=2022)
+        assert config.n_years == 3
+        assert config.years == [2020, 2021, 2022]
+        assert config.year_label == '2020-2022'
+        assert config.date_start == '2020-01-01 00:00:00'
+        assert config.date_end == '2022-12-31 21:00:00'
+
+    def test_year_alias_backcompat_emits_deprecation(self):
+        with pytest.warns(DeprecationWarning, match="year_start/year_end"):
+            config = DataConfig(year=2019)
+        assert config.year_start == 2019
+        assert config.year_end == 2019
+        assert config.n_years == 1
+
+    def test_year_with_explicit_end(self):
+        # Edge case: legacy `year` plus a new `year_end` extends the range.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            config = DataConfig(year=2020, year_end=2022)
+        assert config.year_start == 2020
+        assert config.year_end == 2022
+
+    def test_inverted_range_raises(self):
+        with pytest.raises(ValueError, match="year_end"):
+            DataConfig(year_start=2022, year_end=2020)
+
+    def test_hours_in_year_leap(self):
+        assert hours_in_year(2020) == 8784   # leap
+        assert hours_in_year(2021) == 8760
+        assert hours_in_year(2024) == 8784   # leap
+
+    def test_hours_in_span_accounts_for_leap(self):
+        # 2020 leap, 2021 non-leap, 2022 non-leap
+        assert hours_in_span(2020, 2022) == 8784 + 8760 + 8760
+        # Single non-leap year
+        assert hours_in_span(2021, 2021) == 8760
+
+    def test_hours_total_property(self):
+        config = DataConfig(year_start=2020, year_end=2022)
+        assert config.hours_total == 8784 + 8760 + 8760
+
+    def test_legacy_dict_exposes_multiyear_fields(self):
+        config = OTEXConfig(data=DataConfig(year_start=2020, year_end=2022))
+        legacy = config.to_legacy_dict()
+        assert legacy['year_start'] == 2020
+        assert legacy['year_end'] == 2022
+        assert legacy['n_years'] == 3
+        assert legacy['years'] == [2020, 2021, 2022]
+        assert legacy['year_label'] == '2020-2022'
+        assert legacy['hours_total'] == 26304
+        # Legacy `year` key still present, points to year_start
+        assert legacy['year'] == 2020
+
+    def test_parameters_and_constants_multiyear(self):
+        inputs = parameters_and_constants(year_start=2020, year_end=2022)
+        assert inputs['n_years'] == 3
+        assert inputs['year_label'] == '2020-2022'
+        assert inputs['date_start'].startswith('2020-')
+        assert inputs['date_end'].startswith('2022-')
+
+    def test_parameters_and_constants_legacy_year_still_works(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            inputs = parameters_and_constants(year=2023)
+        assert inputs['year_start'] == 2023
+        assert inputs['year_end'] == 2023
+        assert inputs['n_years'] == 1
+
+    def test_get_default_config_multiyear(self):
+        config = get_default_config(year_start=2018, year_end=2020)
+        assert config.data.n_years == 3
+        assert config.data.year_start == 2018
+        assert config.data.year_end == 2020

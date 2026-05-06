@@ -67,7 +67,8 @@ otec_plants, sites_df = run_regional_analysis(
     studied_region='Jamaica',
     p_gross=-50000,          # 50 MW
     cost_level='low_cost',
-    year=2020,
+    year_start=2020,
+    year_end=2020,
     cycle_type='rankine_closed',
     fluid_type='ammonia',
     use_coolprop=True,
@@ -117,7 +118,8 @@ from otex.regional import run_regional_analysis
 otec_plants, sites_df = run_regional_analysis(
     studied_region='Jamaica',
     p_gross=-50000,
-    year=2020,
+    year_start=2020,
+    year_end=2020,
 )
 ```
 
@@ -201,18 +203,28 @@ plt.show()
 
 ### OTEC Sites CSV
 
-| Column | Description | Unit |
-|--------|-------------|------|
-| id | Site identifier | - |
-| longitude | Site longitude | degrees |
-| latitude | Site latitude | degrees |
-| p_net_nom | Nominal net power | MW |
-| AEP | Annual Energy Production | GWh |
-| CAPEX | Capital expenditure | $M |
-| LCOE | Levelized cost of energy | ct/kWh |
-| Configuration | Optimal ΔT configuration | - |
-| T_WW_min/med/max | Warm water temperature stats | °C |
-| T_CW_min/med/max | Cold water temperature stats | °C |
+| Column | Description | Unit | Single-yr | Multi-yr |
+|---|---|---|:---:|:---:|
+| id | Site identifier | - | ✓ | ✓ |
+| longitude | Site longitude | degrees | ✓ | ✓ |
+| latitude | Site latitude | degrees | ✓ | ✓ |
+| p_net_nom | Nominal net power | MW | ✓ | ✓ |
+| AEP | Lifetime-average annual energy | MWh | ✓ | ✓ |
+| CAPEX | Capital expenditure | $M | ✓ | ✓ |
+| LCOE | Levelized cost of energy | ct/kWh | ✓ | ✓ |
+| `LCOE_legacy` | Legacy single-rate CRF LCOE for comparison | ct/kWh | — | ✓ |
+| `AEP_min` | Minimum yearly AEP across the run window | MWh | — | ✓ |
+| `AEP_p50` | Median yearly AEP | MWh | — | ✓ |
+| `AEP_max` | Maximum yearly AEP | MWh | — | ✓ |
+| `AEP_std` | Standard deviation of yearly AEP | MWh | — | ✓ |
+| Configuration | Optimal ΔT configuration | - | ✓ | ✓ |
+| T_WW_min/med/max | Warm water temperature stats | °C | ✓ | ✓ |
+| T_CW_min/med/max | Cold water temperature stats | °C | ✓ | ✓ |
+
+For multi-year runs, a companion CSV `OTEC_sites_yearly_*.csv` is also
+emitted with one row per `(site, year)` and columns `id`, `year`,
+`p_net_mean_kW`, `AEP_MWh`. Useful for boxplots of inter-annual
+variability or for fitting trend lines.
 
 ### Power Profiles CSV
 
@@ -250,11 +262,13 @@ OTEX supports two oceanographic data sources. Choose based on your needs:
 ```python
 # Compare results from both sources
 otec_hycom, sites_hycom = run_regional_analysis(
-    studied_region='Jamaica', year=2020, data_source='HYCOM'
+    studied_region='Jamaica', year_start=2020, year_end=2020,
+    data_source='HYCOM'
 )
 
 otec_cmems, sites_cmems = run_regional_analysis(
-    studied_region='Jamaica', year=2020, data_source='CMEMS'
+    studied_region='Jamaica', year_start=2020, year_end=2020,
+    data_source='CMEMS'
 )
 ```
 
@@ -270,7 +284,8 @@ for size_mw in [20, 50, 100, 200]:
     run_regional_analysis(
         studied_region='Jamaica',
         p_gross=-size_mw * 1000,
-        year=2020
+        year_start=2020,
+        year_end=2020
     )
 ```
 
@@ -291,12 +306,97 @@ for cycle in cycles:
 
 ### Multi-Year Analysis
 
+Since 0.2.0, multi-year simulations are supported natively. Pass an
+inclusive year range and the pipeline reads N NetCDFs (one per year),
+concatenates them along the time axis, and recomputes LCOE using a
+discounted-cashflow NPV formulation that accounts for leap years,
+configurable degradation, and OPEX escalation.
+
 ```bash
-# Analyze multiple years via CLI
+# Single CLI invocation covering 2018-2021
+otex-regional Jamaica --year-start 2018 --year-end 2021
+```
+
+```python
+from otex import run_regional_analysis
+
+run_regional_analysis(
+    studied_region='Jamaica',
+    year_start=2018,
+    year_end=2021,
+)
+```
+
+For a multi-year run the output `OTEC_sites_*.csv` adds inter-annual
+variability columns (`AEP_min`, `AEP_p50`, `AEP_max`, `AEP_std`) and a
+`LCOE_legacy` column for comparison with the single-year formulation.
+A second CSV `OTEC_sites_yearly_*.csv` reports per-(site, year) energy.
+
+To run analyses with independent yearly snapshots (the legacy workflow,
+no NPV), keep the loop:
+
+```bash
 for year in 2018 2019 2020 2021; do
     otex-regional Jamaica --year $year
 done
 ```
+
+#### NPV LCOE — degradation and OPEX escalation
+
+When `n_years > 1`, `LCOE` is computed as the per-year discounted cashflow:
+
+```
+                     CAPEX + Σ_t  OPEX_t / (1+r)^t
+LCOE  =  100 ¢ ×  ─────────────────────────────────
+                       Σ_t  E_t / (1+r)^t
+```
+
+where the sum runs over the full project lifetime (`Economics.lifetime_years`,
+30 years by default). Years outside the simulated window are filled by
+**cyclically replicating** the simulated pattern. Two configurable
+multipliers are applied to each year:
+
+- **Power degradation** (lowers `E_t`). Three models, configurable on
+  `Economics.degradation`:
+
+    | Model | Formula | Defaults |
+    |---|---|---|
+    | `constant` | `(1 - rate)^t` | `rate = 0.005` (0.5 %/yr) |
+    | `logistic` | `1 - L / (1 + exp(-k(t - t0)))` | `L=0.30, k=0.30, t0=15` |
+    | `step` | discrete drops at scheduled years | `years=[10, 20], drops=[0.05, 0.05]` |
+
+- **OPEX escalation** (raises `OPEX_t`). Three models, configurable on
+  `Economics.opex_escalation`:
+
+    | Model | Formula | Defaults |
+    |---|---|---|
+    | `flat` | constant | — |
+    | `fixed_rate` | `(1 + rate)^t` | `rate = 0.0` |
+    | `indexed` | user-supplied vector of length `lifetime_years` | — |
+
+Example with custom degradation and 2 % OPEX escalation:
+
+```python
+from otex.config import OTEXConfig, Economics
+from otex.economics import DegradationConfig, OpexEscalationConfig
+
+config = OTEXConfig()
+config.economics = Economics(
+    lifetime_years=30,
+    discount_rate=0.08,
+    degradation=DegradationConfig(model='logistic',
+                                   logistic_L=0.20,
+                                   logistic_k=0.25,
+                                   logistic_t0=12),
+    opex_escalation=OpexEscalationConfig(model='fixed_rate', rate=0.02),
+)
+inputs = config.to_legacy_dict()
+# pass `inputs` to run_regional_analysis via parameters_and_constants(...)
+```
+
+Single-year runs (`n_years == 1`) preserve the legacy single-rate CRF
+LCOE for backward compatibility — they ignore the degradation and
+escalation config.
 
 ## Combining with Uncertainty Analysis
 

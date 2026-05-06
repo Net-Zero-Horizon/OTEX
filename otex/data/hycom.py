@@ -123,32 +123,25 @@ def download_data(cost_level, inputs, studied_region, new_path):
     """
     import xarray as xr
 
-    from otex.data.resources import load_regions
+    from otex.data.regions import resolve_region
+    from otex.data.sites import _DEFAULT_OFFSHORE_BUFFER_DEG, _expand_bbox
 
-    print(f"    [HYCOM download] Reading regions CSV...", flush=True)
-    regions = load_regions()
-
-    if not np.any(regions["region"] == studied_region):
-        raise ValueError(
-            f"Region '{studied_region}' not found.  "
-            "Check for typos or whether it is in download_ranges_per_region.csv"
-        )
-
-    parts = regions["region"].value_counts()[studied_region]
+    print(f"    [HYCOM download] Resolving region: {studied_region}", flush=True)
+    region = resolve_region(studied_region)
+    parts_list = [_expand_bbox(b, _DEFAULT_OFFSHORE_BUFFER_DEG) for b in region.bboxes]
+    parts = len(parts_list)
 
     depth_WW = inputs["length_WW_inlet"]
     depth_CW = inputs["length_CW_inlet"]
-    date_start = inputs["date_start"]
-    date_end = inputs["date_end"]
-    year = int(date_start[:4])
 
-    experiment = get_hycom_experiment(year)
-    opendap_url = experiment["url"]
-    print(
-        f"    [HYCOM download] Using experiment: {opendap_url} "
-        f"(covers {experiment['years'][0]}-{experiment['years'][1]})",
-        flush=True,
-    )
+    # Resolve simulated year range (multi-year support).
+    year_start = inputs.get("year_start")
+    year_end = inputs.get("year_end")
+    if year_start is None or year_end is None:
+        single_year = int(inputs["date_start"][:4])
+        year_start = year_start or single_year
+        year_end = year_end or single_year
+    years = list(range(int(year_start), int(year_end) + 1))
 
     files: list[str] = []
 
@@ -161,144 +154,156 @@ def download_data(cost_level, inputs, studied_region, new_path):
         )
 
         for part in range(parts):
-            region_rows = regions[regions["region"] == studied_region]
-            north = float(region_rows["north"].iloc[part])
-            south = float(region_rows["south"].iloc[part])
-            west = float(region_rows["west"].iloc[part])
-            east = float(region_rows["east"].iloc[part])
+            _bbox = parts_list[part]
+            north = float(_bbox.north)
+            south = float(_bbox.south)
+            west = float(_bbox.west)
+            east = float(_bbox.east)
 
-            filename = (
-                f"T_{round(depth, 0)}m_{date_start[:4]}"
-                f"_{studied_region}_{part + 1}.nc"
-            ).replace(" ", "_")
-            filepath = os.path.join(new_path, filename)
-            files.append(filepath)
+            for year in years:
+                date_start = f"{year}-01-01 00:00:00"
+                date_end = f"{year}-12-31 21:00:00"
 
-            # Skip if already downloaded and valid
-            if os.path.exists(filepath):
-                try:
-                    import netCDF4
-
-                    nc = netCDF4.Dataset(filepath, "r")
-                    nc.close()
-                    print(
-                        f"    [HYCOM download] {filename} already exists and is valid.",
-                        flush=True,
-                    )
-                    continue
-                except Exception:
-                    print(
-                        f"    [HYCOM download] {filename} is corrupted, re-downloading...",
-                        flush=True,
-                    )
-                    try:
-                        os.remove(filepath)
-                    except OSError:
-                        pass
-
-            start_time = _time()
-            print(
-                f"    [HYCOM download] Downloading {filename} "
-                f"(depth={nearest}m, part {part + 1}/{parts})...",
-                flush=True,
-            )
-
-            # Convert longitude to HYCOM 0-360 convention
-            west_360 = _lon_to_360(west)
-            east_360 = _lon_to_360(east)
-
-            # Convert dates to hours since time origin for OPeNDAP slicing
-            import datetime
-
-            t_origin = datetime.datetime.strptime(
-                experiment["time_origin"], "%Y-%m-%d %H:%M:%S"
-            )
-            t_start = datetime.datetime.strptime(date_start, "%Y-%m-%d %H:%M:%S")
-            t_end = datetime.datetime.strptime(date_end, "%Y-%m-%d %H:%M:%S")
-
-            hours_start = (t_start - t_origin).total_seconds() / 3600.0
-            hours_end = (t_end - t_origin).total_seconds() / 3600.0
-
-            # Open OPeNDAP dataset (lazy — no data transferred yet)
-            ds = xr.open_dataset(opendap_url, decode_times=False)
-
-            try:
-                # Select depth (exact match since we mapped to nearest)
-                ds_depth = ds.sel(depth=nearest, method="nearest")
-
-                # Select time range
-                ds_time = ds_depth.sel(
-                    time=slice(hours_start, hours_end),
-                )
-
-                # Select spatial extent
-                # Handle the case where west > east in 0-360 (crossing 0° meridian)
-                if west_360 <= east_360:
-                    ds_sub = ds_time.sel(
-                        lat=slice(south, north),
-                        lon=slice(west_360, east_360),
-                    )
-                else:
-                    # Region crosses 0° meridian — select both sides
-                    ds_west = ds_time.sel(
-                        lat=slice(south, north),
-                        lon=slice(west_360, 360.0),
-                    )
-                    ds_east = ds_time.sel(
-                        lat=slice(south, north),
-                        lon=slice(0.0, east_360),
-                    )
-                    ds_sub = xr.concat([ds_west, ds_east], dim="lon")
-
-                # Extract only temperature variable
-                temp = ds_sub["water_temp"].load()
-
-                # Build a CMEMS-compatible dataset:
-                #   variable  : thetao
-                #   dimensions: time, depth, latitude, longitude
-                #   depth is a scalar coordinate expanded to a length-1 dim
-                out_ds = xr.Dataset(
-                    {
-                        "thetao": xr.DataArray(
-                            temp.values[:, np.newaxis, :, :]
-                            if temp.ndim == 3
-                            else temp.values,
-                            dims=["time", "depth", "latitude", "longitude"],
-                        ),
-                    },
-                    coords={
-                        "time": (
-                            "time",
-                            ds_sub["time"].values,
-                            {"units": f"hours since {experiment['time_origin']}"},
-                        ),
-                        "depth": ("depth", [nearest]),
-                        "latitude": ("latitude", ds_sub["lat"].values),
-                        "longitude": (
-                            "longitude",
-                            # Convert back to -180..180 for CMEMS compatibility
-                            np.where(
-                                ds_sub["lon"].values > 180,
-                                ds_sub["lon"].values - 360,
-                                ds_sub["lon"].values,
-                            ),
-                        ),
-                    },
-                )
-
-                # Ensure output directory exists
-                os.makedirs(os.path.dirname(filepath) or new_path, exist_ok=True)
-
-                out_ds.to_netcdf(filepath, format="NETCDF3_CLASSIC")
-                elapsed = (_time() - start_time) / 60
+                experiment = get_hycom_experiment(year)
+                opendap_url = experiment["url"]
                 print(
-                    f"    [HYCOM download] {filename} saved. "
-                    f"Time: {elapsed:.2f} minutes.",
+                    f"    [HYCOM download] Year {year}: experiment {opendap_url} "
+                    f"(covers {experiment['years'][0]}-{experiment['years'][1]})",
                     flush=True,
                 )
 
-            finally:
-                ds.close()
+                filename = (
+                    f"T_{round(depth, 0)}m_{year}"
+                    f"_{studied_region}_{part + 1}.nc"
+                ).replace(" ", "_")
+                filepath = os.path.join(new_path, filename)
+                files.append(filepath)
+
+                # Skip if already downloaded and valid
+                if os.path.exists(filepath):
+                    try:
+                        import netCDF4
+
+                        nc = netCDF4.Dataset(filepath, "r")
+                        nc.close()
+                        print(
+                            f"    [HYCOM download] {filename} already exists and is valid.",
+                            flush=True,
+                        )
+                        continue
+                    except Exception:
+                        print(
+                            f"    [HYCOM download] {filename} is corrupted, re-downloading...",
+                            flush=True,
+                        )
+                        try:
+                            os.remove(filepath)
+                        except OSError:
+                            pass
+
+                start_time = _time()
+                print(
+                    f"    [HYCOM download] Downloading {filename} "
+                    f"(depth={nearest}m, part {part + 1}/{parts})...",
+                    flush=True,
+                )
+
+                # Convert longitude to HYCOM 0-360 convention
+                west_360 = _lon_to_360(west)
+                east_360 = _lon_to_360(east)
+
+                # Convert dates to hours since time origin for OPeNDAP slicing
+                import datetime
+
+                t_origin = datetime.datetime.strptime(
+                    experiment["time_origin"], "%Y-%m-%d %H:%M:%S"
+                )
+                t_start = datetime.datetime.strptime(date_start, "%Y-%m-%d %H:%M:%S")
+                t_end = datetime.datetime.strptime(date_end, "%Y-%m-%d %H:%M:%S")
+
+                hours_start = (t_start - t_origin).total_seconds() / 3600.0
+                hours_end = (t_end - t_origin).total_seconds() / 3600.0
+
+                # Open OPeNDAP dataset (lazy — no data transferred yet)
+                ds = xr.open_dataset(opendap_url, decode_times=False)
+
+                try:
+                    # Select depth (exact match since we mapped to nearest)
+                    ds_depth = ds.sel(depth=nearest, method="nearest")
+
+                    # Select time range
+                    ds_time = ds_depth.sel(
+                        time=slice(hours_start, hours_end),
+                    )
+
+                    # Select spatial extent
+                    # Handle the case where west > east in 0-360 (crossing 0° meridian)
+                    if west_360 <= east_360:
+                        ds_sub = ds_time.sel(
+                            lat=slice(south, north),
+                            lon=slice(west_360, east_360),
+                        )
+                    else:
+                        # Region crosses 0° meridian — select both sides
+                        ds_west = ds_time.sel(
+                            lat=slice(south, north),
+                            lon=slice(west_360, 360.0),
+                        )
+                        ds_east = ds_time.sel(
+                            lat=slice(south, north),
+                            lon=slice(0.0, east_360),
+                        )
+                        ds_sub = xr.concat([ds_west, ds_east], dim="lon")
+
+                    # Extract only temperature variable
+                    temp = ds_sub["water_temp"].load()
+
+                    # Build a CMEMS-compatible dataset:
+                    #   variable  : thetao
+                    #   dimensions: time, depth, latitude, longitude
+                    #   depth is a scalar coordinate expanded to a length-1 dim
+                    out_ds = xr.Dataset(
+                        {
+                            "thetao": xr.DataArray(
+                                temp.values[:, np.newaxis, :, :]
+                                if temp.ndim == 3
+                                else temp.values,
+                                dims=["time", "depth", "latitude", "longitude"],
+                            ),
+                        },
+                        coords={
+                            "time": (
+                                "time",
+                                ds_sub["time"].values,
+                                {"units": f"hours since {experiment['time_origin']}"},
+                            ),
+                            "depth": ("depth", [nearest]),
+                            "latitude": ("latitude", ds_sub["lat"].values),
+                            "longitude": (
+                                "longitude",
+                                # Convert back to -180..180 for CMEMS compatibility
+                                np.where(
+                                    ds_sub["lon"].values > 180,
+                                    ds_sub["lon"].values - 360,
+                                    ds_sub["lon"].values,
+                                ),
+                            ),
+                        },
+                    )
+
+                    # Ensure output directory exists
+                    os.makedirs(os.path.dirname(filepath) or new_path, exist_ok=True)
+
+                    out_ds.to_netcdf(filepath, format="NETCDF3_CLASSIC")
+                    elapsed = (_time() - start_time) / 60
+                    print(
+                        f"    [HYCOM download] {filename} saved. "
+                        f"Time: {elapsed:.2f} minutes.",
+                        flush=True,
+                    )
+
+                finally:
+                    ds.close()
 
     print(f"    [HYCOM download] Returning {len(files)} files", flush=True)
     return files

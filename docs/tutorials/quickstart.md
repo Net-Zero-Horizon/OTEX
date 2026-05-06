@@ -30,7 +30,8 @@ inputs = parameters_and_constants(
     cost_level='low_cost',
     cycle_type='rankine_closed',
     fluid_type='ammonia',
-    year=2020
+    year_start=2020,
+    year_end=2020,
 )
 
 # View key parameters

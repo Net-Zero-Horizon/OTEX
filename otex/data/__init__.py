@@ -16,6 +16,16 @@ from .resources import (
     load_regions,
     load_sites,
 )
+from .regions import (
+    BBox,
+    Region,
+    resolve_region,
+    list_regions,
+)
+from .sites import build_sites
+from .bathymetry import fetch_bathymetry, BathymetrySubset
+from .coastline import distance_to_shore, get_coastline_index
+from .demand import fetch_demand_TWh
 
 __all__ = [
     "download_data",
@@ -25,6 +35,17 @@ __all__ = [
     "get_data_path",
     "load_regions",
     "load_sites",
+    # New on-demand catalog (0.2.0+)
+    "BBox",
+    "Region",
+    "resolve_region",
+    "list_regions",
+    "build_sites",
+    "fetch_bathymetry",
+    "BathymetrySubset",
+    "distance_to_shore",
+    "get_coastline_index",
+    "fetch_demand_TWh",
 ]
 
 

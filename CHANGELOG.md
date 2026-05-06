@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - Multi-year simulations + on-demand site catalog
+
+### Added
+
+#### On-demand region & site catalog (replaces bundled CSVs)
+- New :mod:`otex.data.regions` — resolve country/territory by name or ISO
+  3166-1 alpha-2/alpha-3 against Natural Earth admin-0 boundaries.
+  Multi-part regions that cross the antimeridian (e.g. Fiji) yield
+  multiple :class:`BBox` parts automatically.
+- New :mod:`otex.data.bathymetry` — fetch ETOPO 2022 1-arcmin
+  bathymetry subsets via NOAA NCEI THREDDS OPeNDAP, cached locally
+  per-bbox in ``~/.otex/cache/bathymetry/``.
+- New :mod:`otex.data.coastline` — distance-to-shore via Natural Earth
+  1:50m coastlines, densified to ~2 km point cloud, KDTree on the
+  unit-sphere. ±1 km accurate, sub-millisecond per query after warmup.
+- New :func:`otex.data.build_sites` — builds the OTEC site DataFrame
+  on demand for a region / bbox / polygon, with caching at
+  ``~/.otex/cache/sites/<key>.parquet``.
+- New :mod:`otex.data.demand` — multi-source electricity demand
+  lookup. Tries Our World in Data first (bulk CSV, ~9 MB cached
+  once locally), falls back to the World Bank Open Data API
+  (``EG.USE.ELEC.KH.PC × SP.POP.TOTL``). Both sources are free and
+  require no authentication. Used by ``regional_batch.py`` for
+  demand-driven plant sizing.
+
+#### Multi-year simulations
+- **Multi-year simulations.** `DataConfig` now accepts `year_start` and
+  `year_end` (inclusive). The thermal/oceanographic pipeline reads N years
+  of NetCDFs, concatenates them along the time axis, and propagates a
+  continuous `DatetimeIndex` through the rest of the analysis.
+  - CLI: `otex-regional --year-start 2020 --year-end 2022`.
+  - Loader validates that the SAME sites appear in every year of the
+    configured range; mismatches raise a clear error pointing at the bad
+    year so users know which NetCDF to re-download.
+- **NPV-based LCOE** (`otex.economics.lcoe_npv`). Replaces the legacy CRF
+  annualisation when `n_years > 1` with explicit per-year discounted
+  cashflows. Inputs from the simulated window are extrapolated cyclically
+  to the project lifetime.
+- **Configurable degradation models** (`DegradationConfig`):
+  `constant`, `logistic`, and `step`.
+- **Configurable OPEX escalation** (`OpexEscalationConfig`):
+  `flat`, `fixed_rate`, and `indexed`.
+- New helper module `otex.economics.timeseries` with
+  `aggregate_p_net_by_year()` and `annual_energy_kwh()` (leap-year aware).
+- Multi-year aware regional outputs:
+  - `OTEC_sites_*.csv` gains `LCOE_legacy`, `AEP_min`, `AEP_p50`,
+    `AEP_max`, and `AEP_std` columns when `n_years > 1`.
+  - New per-(site, year) CSV `OTEC_sites_yearly_*.csv` for diagnostic
+    plotting.
+- HYCOM backend gains the same multi-year loop; runs that span multiple
+  experiment epochs (e.g. reanalysis ↔ analysis) resolve the right
+  experiment per year.
+
+### Removed
+- **All bundled CSV catalogs.** The wheel ships no static data
+  catalog any more:
+  - `CMEMS_points_with_properties.csv` (9.7 MB site grid) → replaced
+    by :func:`otex.data.build_sites` (ETOPO 2022 + Natural Earth).
+  - `download_ranges_per_region.csv` (region bboxes) → replaced by
+    :func:`otex.data.regions.resolve_region` (Natural Earth admin-0).
+  - `country_demand.csv` (electricity demand by country) → replaced
+    by :func:`otex.data.demand.fetch_demand_TWh` (OWID + World Bank).
+
+### Changed
+- :func:`otex.data.load_sites` now requires a ``region`` argument
+  (the legacy zero-arg call returned a 218 k-row global DataFrame
+  built from the now-deleted CSV). Pass a country name / ISO code
+  and optionally ``min_depth`` / ``max_depth``.
+- ``run_regional_analysis`` calls ``load_sites(region, ...)`` with
+  the depth filter from ``DepthLimits`` instead of slicing a bundled
+  global catalog.
+- ``cmems.download_data`` and ``hycom.download_data`` resolve region
+  bboxes via Natural Earth at runtime; they no longer read the
+  deleted bbox CSV.
+- Computed ``water_depth`` and ``dist_shore`` will differ slightly
+  from the legacy CSV values (~5-10 % typical) because the
+  underlying bathymetry source changed (ETOPO 2022 instead of the
+  unspecified source used to build the original CSV). Downstream
+  LCOE values for the same site may shift on the order of 1-2 %
+  for that reason alone.
+- `time_resolution` default in `DataConfig` is now `'24h'` (lowercase) to
+  match pandas ≥ 2.2 frequency aliases. Previously this raised
+  `ValueError: Invalid frequency: H` on modern pandas installs.
+- Cache filenames produced by `data_processing()` and the off-design
+  time-series writer use the multi-year label (`2020-2022`) when
+  applicable. Single-year filenames are unchanged.
+- `otex/analysis/visualization.py` axis labels for OPEX changed from
+  `'OPEX ($/year)'` to `'OPEX ($/yr, lifetime-avg)'` to reflect that
+  multi-year OPEX is the lifetime-discounted average.
+
+### Deprecated
+- `DataConfig.year` and the `year=` parameter on
+  `parameters_and_constants()` / `get_default_config()` /
+  `run_regional_analysis()`. They still work but emit a
+  `DeprecationWarning`. Use `year_start`/`year_end` instead.
+- `lcoe_time_series()` without a `timestamp` argument (legacy CRF path).
+
+### Notes
+- **Single-year LCOE is unchanged.** The NPV path is only triggered when
+  `n_years > 1`, so existing single-year case studies produce the same
+  numbers as 0.1.x.
+
 ## [0.1.4.2] - 2026-05-04
 
 ### Fixed

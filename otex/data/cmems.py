@@ -18,9 +18,11 @@ if not hasattr(np, 'core'):
 
 import datetime
 import os
+import re
 import time as _time_module  # Avoid conflicts with numpy
 import copernicusmarine
 import threading
+from collections import defaultdict
 
 # For file locking: use fcntl on Unix/Linux, msvcrt on Windows
 if sys.platform == 'win32':
@@ -79,52 +81,67 @@ def unlock_file(file_handle):
 
 def download_data(cost_level,inputs,studied_region,new_path):
 
-    ## The csv file below stores all countries and territories that have OTEC resources, their coordinates, and electricity demand in 2019.
+    ## Region geometry is resolved on demand from Natural Earth admin-0
+    ## boundaries (since 0.2.0). For OTEC we extend the country's tight
+    ## land bbox by an offshore buffer so the download window captures
+    ## relevant deep-water cells, mirroring how the legacy CSV bboxes
+    ## were specified.
 
-    print(f"    [download_data] Reading regions CSV...", flush=True)
-    from otex.data.resources import load_regions
-    regions = load_regions()
-    print(f"    [download_data] CSV loaded, checking region: {studied_region}", flush=True)
+    print(f"    [download_data] Resolving region: {studied_region}", flush=True)
+    from otex.data.regions import resolve_region
+    from otex.data.sites import _DEFAULT_OFFSHORE_BUFFER_DEG, _expand_bbox
+    region = resolve_region(studied_region)
+    parts_list = [_expand_bbox(b, _DEFAULT_OFFSHORE_BUFFER_DEG) for b in region.bboxes]
+    parts = len(parts_list)
+    print(f"    [download_data] Resolved to {parts} bbox part(s)", flush=True)
 
-    if np.any(regions['region'] == studied_region):
+    ## OTEC uses warm surface seawater to evaporate a work fluid, while cold deep-sea water is used to condense said work fluid. We download
+    ## seawater temperature data from depths representing warm water (WW) and cold water (CW).
 
-        print(f"    [download_data] Region found, getting parts...", flush=True)
-        parts = regions['region'].value_counts()[studied_region]
-        print(f"    [download_data] Parts: {parts}", flush=True)
-        
-        ## OTEC uses warm surface seawater to evaporate a work fluid, while cold deep-sea water is used to condense said work fluid. We download
-        ## seawater temperature data from depths representing warm water (WW) and cold water (CW). 
-        
-        depth_WW = inputs['length_WW_inlet']
-        depth_CW = inputs['length_CW_inlet']
-        
-        ## Due to download limitations, we only download one year of data. We chose the year 2011, but any year between 1994 and 2012 could also work.
-        
-        date_start = inputs['date_start']
-        date_end = inputs['date_end']
-        
-        ## We store the filenames and their paths, so that the seawater temperature data can be accessed by OTEX later.
+    depth_WW = inputs['length_WW_inlet']
+    depth_CW = inputs['length_CW_inlet']
 
-        files = []
-        # print(depth_WW,depth_CW)
-        print(f"    [download_data] Starting download loop for depths: {depth_WW}, {depth_CW}", flush=True)
-        for depth in [depth_WW,depth_CW]:
-            print(f"    [download_data] Processing depth: {depth}m", flush=True)
-            for part in range(0,parts):
-                print(f"    [download_data] Processing part {part+1}/{parts}", flush=True)
+    ## Multi-year support: download one NetCDF per (depth, part, year). The
+    ## per-year split keeps individual download payloads small enough for
+    ## the CMEMS API and matches the per-year filename pattern that
+    ## ``data_processing`` expects when it groups files by year.
 
-                ## The coordinates for the download are pulled from the csv file. Alternatively, the user could define the coordinates themselves.
+    # Resolve year range: prefer explicit year_start/year_end, fall back to
+    # legacy single-year inferred from date_start.
+    year_start = inputs.get('year_start')
+    year_end = inputs.get('year_end')
+    if year_start is None or year_end is None:
+        single_year = int(inputs['date_start'][0:4])
+        year_start = year_start or single_year
+        year_end = year_end or single_year
+    years = list(range(int(year_start), int(year_end) + 1))
 
-                print(f"    [download_data] Getting coordinates...", flush=True)
-                north = float(regions[regions['region']==studied_region]['north'].iloc[part])
-                south = float(regions[regions['region']==studied_region]['south'].iloc[part])
-                west = float(regions[regions['region']==studied_region]['west'].iloc[part])
-                east = float(regions[regions['region']==studied_region]['east'].iloc[part])
-                print(f"    [download_data] Coordinates: N={north}, S={south}, W={west}, E={east}", flush=True)
+    ## We store the filenames and their paths, so that the seawater temperature data can be accessed by OTEX later.
+
+    files = []
+    print(f"    [download_data] Starting download loop for depths: {depth_WW}, {depth_CW}; years: {years}", flush=True)
+    for depth in [depth_WW,depth_CW]:
+        print(f"    [download_data] Processing depth: {depth}m", flush=True)
+        for part in range(0,parts):
+            print(f"    [download_data] Processing part {part+1}/{parts}", flush=True)
+
+            ## The coordinates for the download are pulled from the csv file. Alternatively, the user could define the coordinates themselves.
+
+            print(f"    [download_data] Getting coordinates...", flush=True)
+            _bbox = parts_list[part]
+            north = float(_bbox.north)
+            south = float(_bbox.south)
+            west = float(_bbox.west)
+            east = float(_bbox.east)
+            print(f"    [download_data] Coordinates: N={north}, S={south}, W={west}, E={east}", flush=True)
+
+            for year in years:
+                date_start = f'{year}-01-01 00:00:00'
+                date_end = f'{year}-12-31 21:00:00'
 
                 start_time = _time()
-                print(f"    [download_data] Creating filename...", flush=True)
-                filename = f'T_{round(depth,0)}m_{date_start[0:4]}_{studied_region}_{part+1}.nc'.replace(" ","_")
+                print(f"    [download_data] Creating filename for year {year}...", flush=True)
+                filename = f'T_{round(depth,0)}m_{year}_{studied_region}_{part+1}.nc'.replace(" ","_")
                 filepath = os.path.join(new_path, filename)
                 files.append(filepath)
                 directory_data_results='Data_Results/'
@@ -209,88 +226,155 @@ def download_data(cost_level,inputs,studied_region,new_path):
 
 
 
-        print(f"    [download_data] Returning {len(files)} files", flush=True)
-        return files    
-        
-    else:
-        raise ValueError('Entered region not valid. Please check for typos and whether the region is included in "download_ranges_per_region.csv"')
+    print(f"    [download_data] Returning {len(files)} files", flush=True)
+    return files
 
 
-def data_processing(files,sites_df,inputs,studied_region,new_path,water,nan_columns = None):
-    ## Here we convert the pandas Dataframe storing site-specific data into a numpy array
-    
-    sites = np.vstack((sites_df['longitude'],sites_df['latitude'],sites_df['dist_shore'],sites_df['id'])).T
-    ## The "for file in files" was made for countries and territories that stretch across the East/West border, like Fiji and New Zealand.
-    ## These regions are split into two parts that cover the regions' Eastern and Western side, respectively.
+# Regex matches the filename pattern produced by ``download_data``:
+#   T_{depth}m_{YYYY}_{region}_{part}.nc   (with optional .0 in depth)
+# The region segment may itself contain underscores, so the year is
+# captured as the *first* 4-digit token after the depth segment.
+_YEAR_FROM_FILENAME_RE = re.compile(r'T_[\d.]+m_(\d{4})_')
 
-    for file in files:
-        ## It can happen that a corruped nc file is downloaded with 1 kB size. In that case, reading the file would raise an error. So, we try to read the file,
-        ## and if it does not work, it means that the file is corrupted and needs to be downloaded again.
+
+def _year_from_filename(path: str) -> int:
+    """Extract the calendar year from a NetCDF filename produced by download_data.
+
+    Raises ValueError if the filename does not match the expected pattern.
+    """
+    name = os.path.basename(path)
+    m = _YEAR_FROM_FILENAME_RE.search(name)
+    if not m:
+        raise ValueError(
+            f"Cannot extract year from filename '{name}'. Expected pattern "
+            f"'T_<depth>m_<YYYY>_<region>_<part>.nc'."
+        )
+    return int(m.group(1))
+
+
+def _group_files_by_year(files):
+    """Group a flat file list into ``{year: [paths]}`` preserving input order."""
+    grouped = defaultdict(list)
+    for f in files:
+        grouped[_year_from_filename(f)].append(f)
+    # Return as a sorted regular dict for deterministic iteration.
+    return {y: grouped[y] for y in sorted(grouped)}
+
+
+def _extract_year_data(year_files, sites_dict, time_origin):
+    """Read all NetCDF parts for one calendar year and return a DataFrame.
+
+    Returns
+    -------
+    df : pd.DataFrame
+        Index = timestamps for that year, columns = "lon_lat" labels.
+    coordinates, dist_shore, id_sites : np.ndarray
+        Aligned site metadata (one entry per column of df).
+    depth : int
+        Depth in metres read from the first file.
+    """
+    # Validate every file opens cleanly.
+    for f in year_files:
         try:
-            T_water_nc = netCDF4.Dataset(file,'r')       
-        except:
-            raise Warning(f'{file} was not downloaded successfully. Please try downloading the file later.')
-    
-    ## Here, we convert the timestamp to year-month-day hour:minute:second    
-    
-    time = T_water_nc.variables['time'][:]
-    time_origin = datetime.datetime.strptime(inputs['time_origin'], '%Y-%m-%d %H:%M:%S') 
-    # print(time)
-    # print(datetime.timedelta(hours=time[0]))
-    
-    
-    timestamp = [time_origin + datetime.timedelta(hours=int(step)) for idx,step in enumerate(time)]  
-    
-    ## Earlier, we downloaded the data across a rectangular field defined by the input coordinates. However, not every data point is suitable
-    ## for OTEC (e.g. points on land, too shallow/ deep water, inside marine protection areas, etc). In this loop, we check which downloaded data points
-    ## could be occupied by OTEC plants, and store their coordinates and temperature profiles in a numpy array
-    
-    T_water_profiles = np.zeros((time.shape[0],0),dtype=np.float64)
-    coordinates = np.zeros((0,2),dtype=np.float64)
-    dist_shore = np.zeros((1,0),dtype=np.float64)
-    id_sites = np.zeros((1,0),dtype=np.float64)
-    
-    # Create a dictionary for fast lookup of sites by coordinates
-    # This significantly improves performance from O(n*m) to O(n+m)
-    sites_dict = {}
-    for i in range(sites.shape[0]):
-        key = (np.round(sites[i, 0], 3), np.round(sites[i, 1], 3))
-        sites_dict[key] = (sites[i, 2], sites[i, 3])  # dist_shore, id
+            netCDF4.Dataset(f, 'r').close()
+        except Exception:
+            raise Warning(
+                f'{f} was not downloaded successfully. Please try '
+                f'downloading the file later.'
+            )
 
-    for file in files:
-        T_water_nc = netCDF4.Dataset(file,'r')
-        latitude = T_water_nc.variables['latitude'][:]
-        longitude = T_water_nc.variables['longitude'][:]
-        depth = int(T_water_nc.variables['depth'][:])
-        T_water = T_water_nc.variables['thetao'][:]
+    # Time axis is shared across parts within a single year.
+    first = netCDF4.Dataset(year_files[0], 'r')
+    time = first.variables['time'][:]
+    timestamp = [time_origin + datetime.timedelta(hours=int(step)) for step in time]
+    first.close()
 
-        # Optimized: use meshgrid to create coordinate pairs efficiently
-        lon_grid, lat_grid = np.meshgrid(longitude, latitude)
-        lon_rounded = np.round(lon_grid, 3)
-        lat_rounded = np.round(lat_grid, 3)
+    T_water_profiles = np.zeros((time.shape[0], 0), dtype=np.float64)
+    coordinates = np.zeros((0, 2), dtype=np.float64)
+    dist_shore = np.zeros((1, 0), dtype=np.float64)
+    id_sites = np.zeros((1, 0), dtype=np.float64)
+    depth = None
 
-        # Iterate over all grid points
+    for f in year_files:
+        ds = netCDF4.Dataset(f, 'r')
+        latitude = ds.variables['latitude'][:]
+        longitude = ds.variables['longitude'][:]
+        depth = int(ds.variables['depth'][:])
+        T_water = ds.variables['thetao'][:]
+
         for idx_lat in range(len(latitude)):
             for idx_lon in range(len(longitude)):
                 lon_val = np.round(longitude[idx_lon], 3)
                 lat_val = np.round(latitude[idx_lat], 3)
                 key = (lon_val, lat_val)
-
-                # Fast lookup in dictionary
                 if key in sites_dict:
                     dist_shore_val, id_site_val = sites_dict[key]
-
+                    column = np.array(T_water[:, :, idx_lat, idx_lon], dtype=np.float64)
                     if T_water_profiles.shape[1] == 0:
-                        # Initialize as 2D array to ensure consistent shape even for single-site regions
                         coordinates = np.array([[lon_val, lat_val]])
                         dist_shore = np.array([[dist_shore_val]])
                         id_sites = np.array([[id_site_val]])
-                        T_water_profiles = (np.array(T_water[:,:,idx_lat,idx_lon],dtype=np.float64))
+                        T_water_profiles = column
                     else:
                         coordinates = np.vstack((coordinates, [lon_val, lat_val]))
                         dist_shore = np.hstack((dist_shore, [[dist_shore_val]]))
                         id_sites = np.hstack((id_sites, [[id_site_val]]))
-                        T_water_profiles = np.hstack((T_water_profiles,(np.array(T_water[:,:,idx_lat,idx_lon],dtype=np.float64))))
+                        T_water_profiles = np.hstack((T_water_profiles, column))
+        ds.close()
+
+    df = pd.DataFrame(T_water_profiles,
+                      columns=[f'{c[0]}_{c[1]}' for c in coordinates])
+    if len(timestamp) != df.shape[0]:
+        raise ValueError(
+            f"Timestamp length ({len(timestamp)}) does not match data rows "
+            f"({df.shape[0]}) in year files {year_files}"
+        )
+    df['time'] = timestamp
+    df = df.set_index('time')
+    return df, coordinates, dist_shore, id_sites, depth
+
+
+def data_processing(files,sites_df,inputs,studied_region,new_path,water,nan_columns = None):
+    ## Here we convert the pandas Dataframe storing site-specific data into a numpy array
+
+    sites = np.vstack((sites_df['longitude'],sites_df['latitude'],sites_df['dist_shore'],sites_df['id'])).T
+
+    # Fast site lookup by (lon, lat). O(1) per grid point vs O(n) linear scan.
+    sites_dict = {}
+    for i in range(sites.shape[0]):
+        key = (np.round(sites[i, 0], 3), np.round(sites[i, 1], 3))
+        sites_dict[key] = (sites[i, 2], sites[i, 3])  # dist_shore, id
+
+    time_origin = datetime.datetime.strptime(inputs['time_origin'], '%Y-%m-%d %H:%M:%S')
+
+    # Group input files by calendar year. Single-year runs produce one group;
+    # multi-year runs stack each year's DataFrame along the time axis.
+    files_by_year = _group_files_by_year(files)
+
+    per_year_dfs = []
+    coordinates = dist_shore = id_sites = None
+    depth = None
+
+    for year, year_files in files_by_year.items():
+        df_y, coords_y, dist_y, ids_y, depth_y = _extract_year_data(
+            year_files, sites_dict, time_origin
+        )
+        if coordinates is None:
+            coordinates, dist_shore, id_sites = coords_y, dist_y, ids_y
+            depth = depth_y
+        else:
+            # Sanity check: same region across years must yield the same sites.
+            if not np.array_equal(coords_y, coordinates):
+                raise ValueError(
+                    f"Site coordinates for year {year} do not match the "
+                    f"reference year {next(iter(files_by_year))}. The region "
+                    f"download window must be identical across all years."
+                )
+        per_year_dfs.append(df_y)
+
+    T_water_profiles_df = pd.concat(per_year_dfs).sort_index()
+    T_water_profiles = np.array(T_water_profiles_df, dtype=np.float64)
+    timestamp = T_water_profiles_df.index
     
     ## After obtaining the relevant CMEMS points, we calculate power transmission losses from OTEC plant offshore to the public grid onshore in kilometres.
     
@@ -301,28 +385,20 @@ def data_processing(files,sites_df,inputs,studied_region,new_path,water,nan_colu
     eff_trans[dist_shore > inputs['threshold_AC_DC']] = 0.964-8*10**-5*dist_shore[dist_shore > 50]  
 
     ## Some data might either be missing (no timestamp) or faulty (e.g. T = -30000)
-    ## First, we remove the faulty values
+    ## First, we remove the faulty values; the DataFrame was assembled above
+    ## (single- or multi-year), so we operate directly on it.
 
-    T_water_profiles[T_water_profiles <= 0] = np.nan
-    
-    ## Here, we resample the dataset to the temporal resolution given in the parameters_and_constants file
-    ## and to fill previously missing steps with NaN, which are then filled via linear interpolation
-    T_water_profiles_df = pd.DataFrame(T_water_profiles)
-    # coordinates is always 2D with shape (n_sites, 2), so iterate over rows
-    T_water_profiles_df.columns = [str(val[0]) + '_' + str(val[1]) for val in coordinates]
+    T_water_profiles_df = T_water_profiles_df.mask(T_water_profiles_df <= 0)
 
-    # Validate timestamp length matches data
-    if len(timestamp) != T_water_profiles_df.shape[0]:
-        raise ValueError(f"Timestamp length ({len(timestamp)}) does not match data rows ({T_water_profiles_df.shape[0]})")
+    ## Here, we resample the dataset to the temporal resolution given in the
+    ## parameters_and_constants file and to fill previously missing steps with
+    ## NaN, which are then filled via linear interpolation.
 
-    T_water_profiles_df['time'] = timestamp
+    # Drop duplicate timestamps that might appear if input files overlap.
+    if T_water_profiles_df.index.duplicated().any():
+        T_water_profiles_df = T_water_profiles_df[~T_water_profiles_df.index.duplicated(keep='first')]
 
-    # Remove duplicate timestamps by keeping the first occurrence
-    # This can happen when processing multiple files with overlapping time ranges
-    if T_water_profiles_df['time'].duplicated().any():
-        T_water_profiles_df = T_water_profiles_df.drop_duplicates(subset='time', keep='first')
-
-    T_water_profiles_df = T_water_profiles_df.set_index('time').asfreq(f'{inputs["t_resolution"]}')
+    T_water_profiles_df = T_water_profiles_df.asfreq(f'{inputs["t_resolution"]}')
     T_water_profiles_df = T_water_profiles_df.interpolate(method='linear')
     
     # Calculating interquartiles. With a factor 3, we are less strict with outliers than the convention of 1.5
@@ -371,9 +447,11 @@ def data_processing(files,sites_df,inputs,studied_region,new_path,water,nan_colu
     
     ## Here we store the cleaned datasets as h5 files so that it does not have to recalculated later.
 
-    year = inputs['date_start'][0:4]
+    # Use the multi-year label (e.g. '2020-2022') when available; fall back to
+    # the single-year string for backward compatibility.
+    year_label = inputs.get('year_label') or inputs['date_start'][0:4]
 
-    filename = f'T_{round(depth,0)}m_{year}_{studied_region}.h5'.replace(" ","_")
+    filename = f'T_{round(depth,0)}m_{year_label}_{studied_region}.h5'.replace(" ","_")
     h5_filepath = new_path + filename
     lockfile_path = h5_filepath + '.lock'
 

@@ -5,9 +5,24 @@ Created on Wed Feb 22 10:56:12 2023
 @author: jkalanger
 """
 
+import calendar
+import warnings
+
 import numpy as np
 
 from .cost_schemes import CostScheme, get_cost_scheme
+from .degradation import (
+    DegradationConfig,
+    OpexEscalationConfig,
+    degradation_factor,
+    extrapolate_cyclic,
+    opex_escalation_factor,
+)
+
+
+def _hours_in_year(year: int) -> int:
+    """Local copy of otex.config.hours_in_year to avoid a circular import."""
+    return 8784 if calendar.isleap(year) else 8760
 
 def capex_opex_lcoe(otec_plant_nom,inputs,cost_level='low_cost'):
     """
@@ -253,11 +268,140 @@ def capex_opex_lcoe(otec_plant_nom,inputs,cost_level='low_cost'):
     # print(len(LCOE_nom[0]))
     return CAPEX_OPEX_dict,CAPEX_total,OPEX,LCOE_nom
 
-def lcoe_time_series(otec_plant_nom,inputs,p_net_ts):
-    
-    p_net_mean = np.nanmean(p_net_ts,axis=0)
-    e_mean_annual = -p_net_mean*8760
-    
-    lcoe_ts = (otec_plant_nom['CAPEX']*inputs['crf']+otec_plant_nom['OPEX'])*100/(e_mean_annual*inputs['availability_factor'])
-    
-    return lcoe_ts
+def lcoe_npv(otec_plant_nom, inputs, p_net_by_year, years):
+    """Levelized Cost of Energy via per-year NPV cashflows.
+
+    Replaces the legacy single-rate CRF formula with an explicit discounted
+    cashflow over the project lifetime. Supports configurable degradation
+    (constant / logistic / step) and OPEX escalation (flat / fixed_rate /
+    indexed) models. Years that fall outside the simulated range are
+    filled by **cyclically replicating** the simulated pattern.
+
+    Formula
+    -------
+    Annual energy in year *t* (kWh):
+
+        E(t) = -P_mean_year(t) * availability * hours(year_t) * deg(t)
+
+    Annual OPEX in year *t* ($):
+
+        OPEX(t) = OPEX_year_0 * esc(t)
+
+    LCOE (¢/kWh):
+
+        LCOE = 100 * (CAPEX + Σ_t OPEX(t) / (1+r)^t) / Σ_t E(t) / (1+r)^t
+
+    Parameters
+    ----------
+    otec_plant_nom : dict
+        Must contain ``CAPEX`` and ``OPEX`` (year-0 OPEX), as populated by
+        :func:`capex_opex_lcoe`.
+    inputs : dict
+        Legacy input dict. Reads ``availability_factor``,
+        ``discount_rate``, ``lifetime``, ``degradation_config``,
+        ``opex_escalation_config``.
+    p_net_by_year : np.ndarray
+        Mean power per (simulated_year, site), shape ``(n_sim, n_sites)``.
+        Sign convention: negative = output.
+    years : sequence of int
+        Calendar years aligned with rows of ``p_net_by_year`` (used to
+        correctly account for leap years inside the simulated window).
+
+    Returns
+    -------
+    np.ndarray
+        LCOE in ¢/kWh, shape ``(n_sites,)``.
+    """
+    if p_net_by_year.ndim != 2:
+        raise ValueError(
+            f"p_net_by_year must be 2-D; got shape {p_net_by_year.shape}"
+        )
+    n_sim = p_net_by_year.shape[0]
+    if len(years) != n_sim:
+        raise ValueError(
+            f"years length ({len(years)}) must match p_net_by_year rows ({n_sim})"
+        )
+
+    L = int(inputs['lifetime'])
+    r = float(inputs['discount_rate'])
+    avail = float(inputs['availability_factor'])
+
+    deg_cfg = inputs.get('degradation_config', DegradationConfig())
+    esc_cfg = inputs.get('opex_escalation_config', OpexEscalationConfig())
+
+    # Cyclically extend simulated years to the full lifetime, then build the
+    # matching list of calendar years so leap-year hours are correct.
+    p_lifetime = extrapolate_cyclic(p_net_by_year, L)
+    years_cycle = [years[t % n_sim] for t in range(L)]
+    hours = np.array([_hours_in_year(y) for y in years_cycle], dtype=np.float64)
+
+    deg = degradation_factor(L, deg_cfg)             # (L,)
+    esc = opex_escalation_factor(L, esc_cfg)         # (L,)
+
+    # Energy delivered each year per site, sign-flipped to be positive.
+    energy = -p_lifetime * avail * hours[:, None] * deg[:, None]   # (L, n_sites)
+
+    # Discount factor (1+r)^t for t = 1..L (cashflows occur at year-end).
+    discount = (1.0 + r) ** np.arange(1, L + 1)
+    inv_disc = (1.0 / discount)[:, None]                             # (L, 1)
+
+    npv_energy = np.sum(energy * inv_disc, axis=0)                   # (n_sites,)
+
+    # CAPEX/OPEX from capex_opex_lcoe come back as (1, n_sites) because
+    # the siting risk multipliers are stored that way. Squeeze to 1-D so
+    # downstream broadcasting with (lifetime, 1) factors produces the
+    # expected (lifetime, n_sites) intermediate without spurious axes.
+    capex = np.asarray(otec_plant_nom['CAPEX'], dtype=np.float64).ravel()
+    opex_year0 = np.asarray(otec_plant_nom['OPEX'], dtype=np.float64).ravel()
+    npv_opex = np.sum(opex_year0[None, :] * esc[:, None] * inv_disc, axis=0)
+
+    if np.any(npv_energy <= 0):
+        raise ValueError(
+            "NPV of delivered energy is non-positive; check power profile, "
+            "availability, or degradation settings."
+        )
+
+    return 100.0 * (capex + npv_opex) / npv_energy
+
+
+def lcoe_time_series(otec_plant_nom, inputs, p_net_ts, timestamp=None):
+    """Levelized cost of energy from a power-profile time series.
+
+    When ``timestamp`` is provided, the function uses the multi-year NPV
+    formulation (:func:`lcoe_npv`). When omitted, it falls back to the
+    legacy single-rate annualisation that ships with versions <= 0.1.x and
+    emits a :class:`DeprecationWarning`.
+
+    Parameters
+    ----------
+    otec_plant_nom : dict
+        Plant cost dict (must contain ``CAPEX`` and ``OPEX``).
+    inputs : dict
+        Legacy parameter dict.
+    p_net_ts : np.ndarray
+        Power profile, shape ``(n_timesteps, n_sites)``.
+    timestamp : pd.DatetimeIndex or sequence of datetimes, optional
+        Time index aligned with ``p_net_ts`` axis 0. Required to enable
+        the NPV path; without it the legacy formula is used.
+    """
+    if timestamp is not None:
+        from .timeseries import aggregate_p_net_by_year
+        p_net_by_year, years = aggregate_p_net_by_year(p_net_ts, timestamp)
+        return lcoe_npv(otec_plant_nom, inputs, p_net_by_year, years)
+
+    warnings.warn(
+        "lcoe_time_series called without `timestamp`; falling back to the "
+        "legacy single-rate CRF formula. Pass the `timestamp` argument to "
+        "use the multi-year NPV LCOE introduced in 0.2.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    p_net_mean = np.nanmean(p_net_ts, axis=0)
+    # Legacy: assume 8760 h/yr (does not account for leap years or
+    # multi-year averaging).
+    e_mean_annual = -p_net_mean * 8760
+
+    return (otec_plant_nom['CAPEX'] * inputs['crf'] + otec_plant_nom['OPEX']) * 100 / (
+        e_mean_annual * inputs['availability_factor']
+    )

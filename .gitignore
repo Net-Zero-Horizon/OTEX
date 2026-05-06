@@ -72,10 +72,9 @@ venv.bak/
 *.nc
 *.hdf5
 Data_Results/
-# ...except the small bundled reference CSVs that ship with the package.
-# Without these the wheel is unusable (region database + CMEMS site list).
-!otex/data/CMEMS_points_with_properties.csv
-!otex/data/download_ranges_per_region.csv
+# Since 0.2.0 the package ships no bundled data file — every catalog
+# (bbox, site grid, demand) is resolved on demand from Natural Earth,
+# ETOPO 2022, and the Our World in Data + World Bank energy datasets.
 
 # OS files
 .DS_Store
@@ -91,3 +90,8 @@ Global_OTEC_Results/
 # Project specific
 *.log
 *.tmp
+
+# Untracked working-copy artefacts (research scripts and HPC harness
+# kept locally; deliberately excluded from the published wheel).
+global_otec_analysis.py
+hpc/

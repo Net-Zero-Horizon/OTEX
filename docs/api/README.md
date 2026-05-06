@@ -31,7 +31,9 @@ def parameters_and_constants(
     cycle_type: str = 'rankine_closed',
     use_coolprop: bool = True,
     optimize_depth: bool = False,
-    year: int = 2020
+    year: Optional[int] = None,
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
 ) -> Dict[str, Any]
 ```
 
@@ -45,10 +47,17 @@ Create configuration dictionary for OTEC analysis.
 - `cycle_type`: Thermodynamic cycle type
 - `use_coolprop`: Use CoolProp for fluid properties
 - `optimize_depth`: Optimize cold water intake depth
-- `year`: Year for analysis
+- `year`: Single calendar year (deprecated since 0.2.0; emits
+  `DeprecationWarning`). Use `year_start`/`year_end`.
+- `year_start`: First simulated calendar year, inclusive (default 2020).
+- `year_end`: Last simulated calendar year, inclusive (default
+  `year_start`). Set `year_end > year_start` for multi-year simulations.
 
 **Returns:**
-- Dictionary with all configuration parameters
+- Dictionary with all configuration parameters. Multi-year extras
+  exposed in the dict: `year_start`, `year_end`, `years`, `n_years`,
+  `hours_total`, `year_label` (e.g. `'2020-2023'`),
+  `degradation_config`, `opex_escalation_config`.
 
 **Example:**
 ```python
@@ -269,6 +278,77 @@ def get_cost_scheme(cost_level: Union[str, CostScheme]) -> CostScheme
 
 Resolve a string identifier or `CostScheme` to a `CostScheme` instance.
 Raises `ValueError` if the string is not a recognised built-in name.
+
+### Multi-year NPV LCOE *(0.2.0)*
+
+#### `lcoe_npv`
+
+```python
+def lcoe_npv(
+    otec_plant_nom: Dict,
+    inputs: Dict,
+    p_net_by_year: np.ndarray,
+    years: Sequence[int],
+) -> np.ndarray
+```
+
+Levelized cost of energy via per-year discounted cashflow. Replaces the
+single-rate CRF formula when `n_years > 1`. Years outside the simulated
+window are filled by **cyclic replication** of the simulated pattern.
+
+Reads `lifetime`, `discount_rate`, `availability_factor`,
+`degradation_config`, and `opex_escalation_config` from `inputs`.
+
+**Returns:** LCOE in ¢/kWh, shape `(n_sites,)`.
+
+#### `DegradationConfig`
+
+```python
+@dataclass
+class DegradationConfig:
+    model: Literal['constant', 'logistic', 'step'] = 'constant'
+
+    # constant: (1 - rate) ** t
+    rate: float = 0.005
+
+    # logistic: 1 - L / (1 + exp(-k * (t - t0)))
+    logistic_L: float = 0.30
+    logistic_k: float = 0.30
+    logistic_t0: float = 15.0
+
+    # step: discrete drops at scheduled years
+    step_years: List[int] = [10, 20]
+    step_drops: List[float] = [0.05, 0.05]
+```
+
+Per-year multiplicative power factor over the project lifetime. Year 0
+is always 1.0; subsequent years follow the chosen model.
+
+#### `OpexEscalationConfig`
+
+```python
+@dataclass
+class OpexEscalationConfig:
+    model: Literal['flat', 'fixed_rate', 'indexed'] = 'flat'
+
+    # fixed_rate: (1 + rate) ** t
+    rate: float = 0.0
+
+    # indexed: per-year vector of length lifetime_years
+    index: Optional[List[float]] = None
+```
+
+#### `degradation_factor`, `opex_escalation_factor`, `extrapolate_cyclic`
+
+Helpers that build the per-year multiplier arrays and replicate
+short-window simulations to the full lifetime. Mostly internal but
+exposed via `otex.economics` for diagnostics.
+
+```python
+from otex.economics import degradation_factor, DegradationConfig
+arr = degradation_factor(30, DegradationConfig(model='logistic'))
+# arr.shape == (30,), arr[0] == 1.0
+```
 
 ### `capex_opex_lcoe`
 

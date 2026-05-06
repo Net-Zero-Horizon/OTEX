@@ -248,3 +248,349 @@ class TestHYCOMModule:
         """download_data_hycom should be accessible via lazy import."""
         from otex.data import download_data_hycom
         assert callable(download_data_hycom)
+
+
+class TestMultiYearHelpers:
+    """Tests for the year-extraction helpers used by multi-year data processing."""
+
+    def test_year_from_filename_simple(self):
+        from otex.data.cmems import _year_from_filename
+        assert _year_from_filename('T_20.0m_2021_Jamaica_1.nc') == 2021
+
+    def test_year_from_filename_with_path(self):
+        from otex.data.cmems import _year_from_filename
+        assert _year_from_filename('/tmp/runs/T_1062.0m_2018_New_Zealand_2.nc') == 2018
+
+    def test_year_from_filename_int_depth(self):
+        from otex.data.cmems import _year_from_filename
+        # Older files may have integer depth (no decimal point)
+        assert _year_from_filename('T_20m_2020_Hawaii_1.nc') == 2020
+
+    def test_year_from_filename_invalid_raises(self):
+        from otex.data.cmems import _year_from_filename
+        with pytest.raises(ValueError, match="Cannot extract year"):
+            _year_from_filename('not_a_temperature_file.nc')
+
+    def test_group_files_by_year_orders_chronologically(self):
+        from otex.data.cmems import _group_files_by_year
+        files = [
+            'T_20.0m_2022_X_1.nc',
+            'T_20.0m_2020_X_1.nc',
+            'T_20.0m_2021_X_1.nc',
+            'T_20.0m_2020_X_2.nc',
+        ]
+        grouped = _group_files_by_year(files)
+        assert list(grouped.keys()) == [2020, 2021, 2022]
+        assert len(grouped[2020]) == 2
+        assert len(grouped[2021]) == 1
+
+
+class TestMultiYearDataProcessing:
+    """End-to-end tests for data_processing with synthetic NetCDF files."""
+
+    def _write_synthetic_nc(self, path, year, depth=20.0, n_days=365,
+                            lats=None, lons=None, base_temp=28.0):
+        """Create a minimal CMEMS-compatible NetCDF for one year."""
+        import netCDF4
+        import datetime
+
+        if lats is None:
+            lats = np.array([10.0, 10.5])
+        if lons is None:
+            lons = np.array([-80.0, -79.5])
+
+        # Hours since 1950-01-01 to year-01-01
+        t_origin = datetime.datetime(1950, 1, 1)
+        t_year_start = datetime.datetime(year, 1, 1)
+        hours_offset = (t_year_start - t_origin).total_seconds() / 3600.0
+        time_vals = hours_offset + np.arange(n_days) * 24.0
+
+        ds = netCDF4.Dataset(path, 'w', format='NETCDF3_CLASSIC')
+        ds.createDimension('time', n_days)
+        ds.createDimension('depth', 1)
+        ds.createDimension('latitude', len(lats))
+        ds.createDimension('longitude', len(lons))
+
+        v_time = ds.createVariable('time', 'f8', ('time',))
+        v_time[:] = time_vals
+        v_depth = ds.createVariable('depth', 'f4', ('depth',))
+        v_depth[:] = [depth]
+        v_lat = ds.createVariable('latitude', 'f4', ('latitude',))
+        v_lat[:] = lats
+        v_lon = ds.createVariable('longitude', 'f4', ('longitude',))
+        v_lon[:] = lons
+
+        v_T = ds.createVariable('thetao', 'f4',
+                                ('time', 'depth', 'latitude', 'longitude'))
+        # Simple seasonal signal + per-year offset to verify concatenation works.
+        season = 2.0 * np.sin(2 * np.pi * np.arange(n_days) / 365.25)
+        T = base_temp + season + (year - 2020) * 0.1
+        # Broadcast to (time, depth=1, lat, lon)
+        v_T[:] = np.broadcast_to(
+            T[:, None, None, None],
+            (n_days, 1, len(lats), len(lons)),
+        ).astype('f4')
+        ds.close()
+
+    def test_synthetic_helper_writes_readable_file(self, tmp_path):
+        """Sanity check: the synthetic NetCDF helper produces a valid file."""
+        try:
+            import netCDF4  # noqa: F401
+        except ImportError:
+            pytest.skip("netCDF4 not available")
+        path = str(tmp_path / 'T_20.0m_2020_TestRegion_1.nc')
+        self._write_synthetic_nc(path, 2020, n_days=10)
+        import netCDF4
+        nc = netCDF4.Dataset(path, 'r')
+        assert nc.variables['thetao'].shape == (10, 1, 2, 2)
+        nc.close()
+
+    def _make_sites_df(self, lats, lons):
+        import pandas as pd
+        rows = []
+        sid = 1
+        for lat in lats:
+            for lon in lons:
+                rows.append({
+                    'longitude': float(lon),
+                    'latitude': float(lat),
+                    'dist_shore': 10.0,
+                    'id': sid,
+                })
+                sid += 1
+        return pd.DataFrame(rows)
+
+    def test_data_processing_multiyear_concatenates_time_axis(self, tmp_path):
+        """data_processing with files from 3 years should produce a 3x-long time series."""
+        try:
+            import netCDF4  # noqa: F401
+        except ImportError:
+            pytest.skip("netCDF4 not available")
+
+        from otex.data.cmems import data_processing
+        from otex.config import parameters_and_constants
+
+        lats = np.array([10.0, 10.5])
+        lons = np.array([-80.0, -79.5])
+
+        # Write 3 yearly NetCDFs (use small n_days to keep test fast).
+        n_days_per_year = 30
+        files = []
+        for year in (2020, 2021, 2022):
+            p = tmp_path / f'T_20.0m_{year}_TestRegion_1.nc'
+            self._write_synthetic_nc(str(p), year, depth=20.0,
+                                      n_days=n_days_per_year,
+                                      lats=lats, lons=lons)
+            files.append(str(p))
+
+        sites_df = self._make_sites_df(lats, lons)
+        inputs = parameters_and_constants(year_start=2020, year_end=2022)
+
+        T_profiles, T_design, coords, ids, ts, inputs_out, nan_cols = data_processing(
+            files, sites_df, inputs, 'TestRegion', str(tmp_path) + '/', 'WW'
+        )
+
+        # Time axis: 3 years × 30 days = 90 timesteps after asfreq + interp.
+        # asfreq('24H') may produce 89 days because the spans are non-contiguous.
+        # We accept anything >= 3*30 - 2 to allow for boundary effects.
+        assert T_profiles.shape[0] >= 3 * n_days_per_year - 2
+        assert T_profiles.shape[1] == 4  # 2 lats × 2 lons
+        assert ts[0].year == 2020
+        assert ts[-1].year == 2022
+
+        # Cache file should use the multi-year label.
+        cache_files = list(tmp_path.glob('T_20*m_2020-2022_TestRegion.h5'))
+        assert len(cache_files) == 1, \
+            f"Expected one multi-year H5 file, found: {list(tmp_path.glob('*.h5'))}"
+
+    def test_data_processing_single_year_unchanged(self, tmp_path):
+        """Single-year invocation must still produce the legacy filename."""
+        try:
+            import netCDF4  # noqa: F401
+        except ImportError:
+            pytest.skip("netCDF4 not available")
+
+        from otex.data.cmems import data_processing
+        from otex.config import parameters_and_constants
+
+        lats = np.array([10.0, 10.5])
+        lons = np.array([-80.0, -79.5])
+
+        p = tmp_path / 'T_20.0m_2020_TestRegion_1.nc'
+        self._write_synthetic_nc(str(p), 2020, depth=20.0,
+                                  n_days=30, lats=lats, lons=lons)
+
+        sites_df = self._make_sites_df(lats, lons)
+        inputs = parameters_and_constants(year_start=2020, year_end=2020)
+
+        data_processing(
+            [str(p)], sites_df, inputs, 'TestRegion', str(tmp_path) + '/', 'WW'
+        )
+
+        cache_files = list(tmp_path.glob('T_20*m_2020_TestRegion.h5'))
+        assert len(cache_files) == 1, \
+            f"Expected single-year H5 file, found: {list(tmp_path.glob('*.h5'))}"
+
+    def test_data_processing_mismatched_sites_across_years_raises(self, tmp_path):
+        """If two yearly files have different site grids, processing must error."""
+        try:
+            import netCDF4  # noqa: F401
+        except ImportError:
+            pytest.skip("netCDF4 not available")
+
+        from otex.data.cmems import data_processing
+        from otex.config import parameters_and_constants
+
+        # Year 2020 has 2x2 grid; year 2021 has a SHIFTED grid → mismatch.
+        f20 = tmp_path / 'T_20.0m_2020_TestRegion_1.nc'
+        f21 = tmp_path / 'T_20.0m_2021_TestRegion_1.nc'
+        self._write_synthetic_nc(str(f20), 2020, n_days=30,
+                                  lats=np.array([10.0, 10.5]),
+                                  lons=np.array([-80.0, -79.5]))
+        self._write_synthetic_nc(str(f21), 2021, n_days=30,
+                                  lats=np.array([20.0, 20.5]),  # different!
+                                  lons=np.array([-80.0, -79.5]))
+
+        # sites_df must overlap with BOTH grids for the bug to surface as
+        # "different sites per year" rather than "no sites at all".
+        sites_df = self._make_sites_df(
+            lats=np.array([10.0, 10.5, 20.0, 20.5]),
+            lons=np.array([-80.0, -79.5]),
+        )
+        inputs = parameters_and_constants(year_start=2020, year_end=2021)
+
+        with pytest.raises(ValueError, match="do not match"):
+            data_processing(
+                [str(f20), str(f21)], sites_df, inputs,
+                'TestRegion', str(tmp_path) + '/', 'WW'
+            )
+
+
+# Tests for the on-demand region/site/bathymetry catalog (0.2.0).
+# These exercise pure-Python helpers that don't require the network
+# (network-dependent tests live in TestOnDemandCatalogNetwork below).
+
+class TestRegionsHelpers:
+    """Pure-Python helpers in otex.data.regions and sites."""
+
+    def test_bbox_dataclass_basic(self):
+        from otex.data.regions import BBox
+        b = BBox(north=20, south=10, east=-70, west=-80)
+        assert b.as_tuple() == (20, 10, -70, -80)
+        assert not b.crosses_antimeridian
+
+    def test_bbox_antimeridian_detection(self):
+        from otex.data.regions import BBox
+        b = BBox(north=10, south=-10, east=-170, west=170)
+        assert b.crosses_antimeridian
+
+    def test_split_at_antimeridian_simple_geometry(self):
+        from shapely.geometry import box
+        from otex.data.regions import _split_at_antimeridian
+        # Simple polygon entirely on one side: returns single bbox.
+        geom = box(-80, 10, -70, 20)
+        parts = _split_at_antimeridian(geom)
+        assert len(parts) == 1
+        assert parts[0].east == -70
+        assert parts[0].west == -80
+
+    def test_expand_bbox_clips_to_global_range(self):
+        from otex.data.regions import BBox
+        from otex.data.sites import _expand_bbox
+        # bbox near pole; buffer must not exceed 90.
+        b = BBox(north=88, south=-88, east=170, west=-170)
+        out = _expand_bbox(b, 5.0)
+        assert out.north == 90.0
+        assert out.south == -90.0
+        assert out.east == 175.0
+        assert out.west == -175.0
+
+    def test_make_grid_resolution(self):
+        from otex.data.regions import BBox
+        from otex.data.sites import _make_grid
+        b = BBox(north=10, south=0, east=10, west=0)
+        lon, lat = _make_grid(b, step=1.0)
+        # Inclusive on both ends after snapping → 11x11 grid.
+        assert lon.size == 11 * 11
+        assert lat.size == 11 * 11
+        assert float(lon.min()) == 0.0
+        assert float(lon.max()) == 10.0
+
+
+class TestCoastlineHelpers:
+    """Math-only helpers in otex.data.coastline."""
+
+    def test_lonlat_to_ecef_unit_sphere(self):
+        import numpy as np
+        from otex.data.coastline import _lonlat_to_ecef
+        # All ECEF unit-sphere points must have norm 1.
+        lons = np.array([0.0, 90.0, -45.0, 180.0])
+        lats = np.array([0.0, 0.0, 30.0, -60.0])
+        pts = _lonlat_to_ecef(lons, lats)
+        norms = np.linalg.norm(pts, axis=-1)
+        np.testing.assert_allclose(norms, np.ones(4), atol=1e-12)
+
+    def test_chord_to_arc_km_zero(self):
+        import numpy as np
+        from otex.data.coastline import _chord_to_arc_km
+        np.testing.assert_allclose(_chord_to_arc_km(np.array(0.0)), 0.0)
+
+    def test_chord_to_arc_km_full_diameter(self):
+        import numpy as np
+        from otex.data.coastline import _chord_to_arc_km, _EARTH_RADIUS_KM
+        # Chord = 2 (diameter) → arc = pi * R (half circumference).
+        result = float(_chord_to_arc_km(np.array(2.0)))
+        np.testing.assert_allclose(result, np.pi * _EARTH_RADIUS_KM, rtol=1e-9)
+
+
+class TestLoadRegionsLegacyAPI:
+    """The 0.2.0 load_regions/load_sites preserve the legacy entry points
+    for code that imported them, but reroute through Natural Earth /
+    ETOPO. These tests assert the API surface (callable, schema) without
+    requiring the network — they hit the on-process cache populated by
+    a small monkey-patch.
+    """
+
+    def test_load_sites_requires_region_now(self):
+        import pytest
+        from otex.data.resources import load_sites
+        with pytest.raises(ValueError, match="requires a region"):
+            load_sites()
+
+    def test_demand_module_exposes_multi_source_api(self):
+        from otex.data.demand import (
+            fetch_demand_TWh, _fetch_owid, _fetch_world_bank,
+        )
+        assert callable(fetch_demand_TWh)
+        assert callable(_fetch_owid)
+        assert callable(_fetch_world_bank)
+
+    def test_demand_falls_back_when_first_provider_fails(self):
+        """Multi-source dispatch must try each provider and stop on success."""
+        from otex.data.demand import fetch_demand_TWh
+        calls = []
+
+        def failing(_iso):
+            calls.append('failing')
+            return None
+
+        def succeeding(_iso):
+            calls.append('succeeding')
+            return 12.34, 2024
+
+        twh, src, year = fetch_demand_TWh(
+            'XYZ',
+            providers=[('first', failing), ('second', succeeding)],
+        )
+        assert twh == 12.34
+        assert src == 'second'
+        assert year == 2024
+        assert calls == ['failing', 'succeeding']
+
+    def test_demand_returns_none_when_all_providers_fail(self):
+        from otex.data.demand import fetch_demand_TWh
+        twh, src, year = fetch_demand_TWh(
+            'XYZ',
+            providers=[('a', lambda _: None), ('b', lambda _: None)],
+        )
+        assert twh is None and src is None and year is None

@@ -22,7 +22,7 @@ from otex.config import OTEXConfig, PlantConfig, DataConfig
 
 cfg = OTEXConfig(
     plant=PlantConfig(gross_power=-50_000),       # 50 MW
-    data=DataConfig(source='HYCOM', year=2020),
+    data=DataConfig(source='HYCOM', year_start=2020, year_end=2020),
 )
 
 # Hard exclusions

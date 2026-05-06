@@ -509,16 +509,29 @@ class GlobalOTECCMEMSAnalysis:
     Comprehensive global OTEC analysis using real CMEMS oceanographic data
     """
 
-    def __init__(self, output_dir='./Global_OTEC_CMEMS/', year=2020):
+    def __init__(self, output_dir='./Global_OTEC_CMEMS/', year=None,
+                 year_start=None, year_end=None):
         """
         Initialize analysis
 
         Args:
             output_dir: Directory to save results
-            year: Year for CMEMS data (2020 recommended, 1993-2023 available)
+            year: Single year (deprecated; use year_start/year_end).
+            year_start: First simulated year, inclusive (default 2020).
+            year_end: Last simulated year, inclusive (default year_start).
         """
+        if year is None and year_start is None:
+            year_start = 2020
+        if year is not None and year_start is None:
+            year_start = year
+        if year_end is None:
+            year_end = year_start
+
         self.output_dir = output_dir
-        self.year = year
+        self.year_start = year_start
+        self.year_end = year_end
+        # Legacy alias used throughout the script and downstream callers.
+        self.year = year_start
         self.timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
         # Create output directory
@@ -646,7 +659,8 @@ class GlobalOTECCMEMSAnalysis:
                 use_coolprop=config['fluid_config']['use_coolprop'] if config['fluid_config'] else False,
                 optimize_depth=False,
                 data='CMEMS',
-                year=self.year,
+                year_start=self.year_start,
+                year_end=self.year_end,
             )
             print(f"    Parameters initialized.", flush=True)
 
@@ -1160,7 +1174,9 @@ class GlobalOTECCMEMSAnalysis:
                 'cycle': results_list[0].get('cycle', 'unknown') if results_list else 'unknown',
                 'fluid': results_list[0].get('fluid', 'unknown') if results_list else 'unknown',
                 'cost_level': cost_level,
-                'year': self.year,
+                'year': self.year_start,
+                'year_start': self.year_start,
+                'year_end': self.year_end,
                 'creation_date': datetime.now().isoformat(),
                 'description': 'OTEC feasibility analysis using CMEMS oceanographic data - Site-level results',
                 'data_source': 'CMEMS Global Ocean Physics Analysis',

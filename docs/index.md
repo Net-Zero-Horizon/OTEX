@@ -7,6 +7,9 @@
 - **Multiple thermodynamic cycles**: Rankine (closed/open/hybrid), Kalina, Uehara
 - **Various working fluids**: Ammonia, R134a, R245fa, Propane, Isobutane
 - **Global analysis**: Integration with CMEMS oceanographic data
+- **Multi-year simulations** *(0.2.0)*: continuous N-year runs with NPV
+  LCOE, configurable degradation and OPEX escalation models, and
+  inter-annual AEP variability metrics
 - **Site screening**: Protected-area exclusion (WDPA), shipping-lane exclusion (World Bank vessel density), seismic and cyclone risk-based cost multipliers
 - **Uncertainty analysis**: Monte Carlo, Sobol sensitivity, Tornado diagrams
 - **Techno-economic assessment**: CAPEX, OPEX, and LCOE calculations

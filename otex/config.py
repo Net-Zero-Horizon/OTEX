@@ -7,11 +7,24 @@ All configurable parameters for OTEC plant design, simulation, and analysis
 are defined here with sensible defaults.
 """
 
+import calendar
+import warnings
 from dataclasses import dataclass, field, asdict
-from typing import Optional, Literal, Tuple, Dict, Any, Union
+from typing import Optional, Literal, Tuple, Dict, Any, Union, List
 import numpy as np
 
 from .economics.cost_schemes import CostScheme
+from .economics.degradation import DegradationConfig, OpexEscalationConfig
+
+
+def hours_in_year(year: int) -> int:
+    """Return 8784 for leap years, 8760 otherwise."""
+    return 8784 if calendar.isleap(year) else 8760
+
+
+def hours_in_span(year_start: int, year_end: int) -> int:
+    """Total hours across an inclusive year range, accounting for leap years."""
+    return sum(hours_in_year(y) for y in range(year_start, year_end + 1))
 
 
 @dataclass
@@ -145,9 +158,18 @@ class Economics:
     # Transmission
     threshold_AC_DC: float = 50.0       # km - Distance threshold for DC vs AC
 
+    # Multi-year NPV controls (added in 0.2.0). Default ``constant`` /
+    # ``flat`` reproduce the legacy single-rate behaviour.
+    degradation: DegradationConfig = field(default_factory=DegradationConfig)
+    opex_escalation: OpexEscalationConfig = field(default_factory=OpexEscalationConfig)
+
     @property
     def crf(self) -> float:
-        """Capital Recovery Factor."""
+        """Capital Recovery Factor (legacy single-rate annualisation).
+
+        Retained for backward compatibility. The 0.2.0 NPV LCOE bypasses
+        ``crf`` and discounts annual cashflows directly.
+        """
         r = self.discount_rate
         n = self.lifetime_years
         return r * (1 + r)**n / ((1 + r)**n - 1)
@@ -188,13 +210,22 @@ class PlantConfig:
 
 @dataclass
 class DataConfig:
-    """Data source configuration."""
+    """Data source configuration.
+
+    Multi-year simulations are configured via ``year_start`` and ``year_end``
+    (inclusive). The legacy ``year`` parameter is still accepted and is
+    equivalent to ``year_start = year_end = year``.
+    """
 
     source: Literal['CMEMS', 'HYCOM'] = 'CMEMS'
-    time_resolution: str = '24H'
+    # pandas >= 2.2 deprecated 'H' in favour of 'h'; use the new spelling.
+    time_resolution: str = '24h'
 
-    # Year and date range (auto-computed from year if not specified)
-    year: int = 2020
+    # Year range. If only `year` is given, year_start = year_end = year.
+    # If neither is given, defaults to 2020.
+    year: Optional[int] = None
+    year_start: Optional[int] = None
+    year_end: Optional[int] = None
     date_start: Optional[str] = None
     date_end: Optional[str] = None
 
@@ -207,11 +238,58 @@ class DataConfig:
     hycom_time_origin: str = '2000-01-01 00:00:00'
 
     def __post_init__(self):
-        """Auto-compute date_start and date_end from year if not specified."""
+        """Resolve year/year_start/year_end and auto-compute date range."""
+        if self.year is not None:
+            warnings.warn(
+                "DataConfig.year is deprecated since 0.2.0 and will be removed "
+                "in a future release; use year_start/year_end instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if self.year_start is None:
+                self.year_start = self.year
+            if self.year_end is None:
+                self.year_end = self.year
+
+        if self.year_start is None:
+            self.year_start = 2020
+        if self.year_end is None:
+            self.year_end = self.year_start
+
+        if self.year_end < self.year_start:
+            raise ValueError(
+                f"year_end ({self.year_end}) must be >= year_start ({self.year_start})"
+            )
+
+        # Keep `year` populated for legacy consumers; equals year_start.
+        self.year = self.year_start
+
         if self.date_start is None:
-            self.date_start = f'{self.year}-01-01 00:00:00'
+            self.date_start = f'{self.year_start}-01-01 00:00:00'
         if self.date_end is None:
-            self.date_end = f'{self.year}-12-31 21:00:00'
+            self.date_end = f'{self.year_end}-12-31 21:00:00'
+
+    @property
+    def n_years(self) -> int:
+        """Number of simulated years (inclusive)."""
+        return self.year_end - self.year_start + 1
+
+    @property
+    def years(self) -> List[int]:
+        """List of simulated calendar years."""
+        return list(range(self.year_start, self.year_end + 1))
+
+    @property
+    def hours_total(self) -> int:
+        """Total hours over the simulation span, accounting for leap years."""
+        return hours_in_span(self.year_start, self.year_end)
+
+    @property
+    def year_label(self) -> str:
+        """String label for filenames: '2020' for single year, '2020-2022' for range."""
+        if self.year_start == self.year_end:
+            return str(self.year_start)
+        return f'{self.year_start}-{self.year_end}'
 
 
 @dataclass
@@ -423,6 +501,12 @@ class OTEXConfig:
                 self.economics.availability,
             ],
 
+            # Multi-year NPV controls (0.2.0+). The full configs are passed
+            # through so that economics functions can call into degradation
+            # and OPEX escalation models without re-importing config.
+            'degradation_config': self.economics.degradation,
+            'opex_escalation_config': self.economics.opex_escalation,
+
             # Plant
             'p_gross': self.plant.gross_power,
             'installation_type': self.plant.installation_type,
@@ -451,7 +535,13 @@ class OTEXConfig:
                            else self.data.hycom_time_origin),
 
             # Date range
-            'year': self.data.year,
+            'year': self.data.year_start,            # legacy alias
+            'year_start': self.data.year_start,
+            'year_end': self.data.year_end,
+            'years': self.data.years,
+            'n_years': self.data.n_years,
+            'hours_total': self.data.hours_total,
+            'year_label': self.data.year_label,
             'date_start': self.data.date_start,
             'date_end': self.data.date_end,
 
@@ -502,11 +592,22 @@ def get_default_config(**kwargs) -> OTEXConfig:
         config.cycle.fluid_type = kwargs.pop('fluid_type')
     if 'cost_level' in kwargs:
         config.economics.cost_level = kwargs.pop('cost_level')
-    if 'year' in kwargs:
-        config.data.year = kwargs.pop('year')
-        # Recompute dates after year change
-        config.data.date_start = f'{config.data.year}-01-01 00:00:00'
-        config.data.date_end = f'{config.data.year}-12-31 21:00:00'
+    # Year handling: support legacy `year` and new `year_start`/`year_end`.
+    year_kw = kwargs.pop('year', None)
+    year_start_kw = kwargs.pop('year_start', None)
+    year_end_kw = kwargs.pop('year_end', None)
+    if year_kw is not None or year_start_kw is not None or year_end_kw is not None:
+        config.data = DataConfig(
+            source=config.data.source,
+            time_resolution=config.data.time_resolution,
+            year=year_kw,
+            year_start=year_start_kw,
+            year_end=year_end_kw,
+            cmems_time_origin=config.data.cmems_time_origin,
+            hycom_glb=config.data.hycom_glb,
+            hycom_horizontal_stride=config.data.hycom_horizontal_stride,
+            hycom_time_origin=config.data.hycom_time_origin,
+        )
 
     # Handle section overrides
     for key, value in kwargs.items():
@@ -525,7 +626,9 @@ def parameters_and_constants(
     cycle_type: str = 'rankine_closed',
     use_coolprop: bool = True,
     optimize_depth: bool = False,
-    year: int = 2020
+    year: Optional[int] = None,
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Legacy compatibility function.
@@ -541,11 +644,17 @@ def parameters_and_constants(
         cycle_type: Thermodynamic cycle type
         use_coolprop: Whether to use CoolProp for fluid properties
         optimize_depth: Whether to optimize cold water intake depth
-        year: Year for analysis (date_start/date_end auto-computed)
+        year: Single year for analysis (deprecated; use year_start/year_end).
+        year_start: First simulated calendar year (inclusive).
+        year_end: Last simulated calendar year (inclusive).
+            If neither year nor year_start is provided, defaults to 2020.
 
     Returns:
         Dictionary with all configuration parameters
     """
+    if year is None and year_start is None:
+        year_start = 2020
+
     config = OTEXConfig(
         plant=PlantConfig(gross_power=p_gross, optimize_depth=optimize_depth),
         economics=Economics(cost_level=cost_level),
@@ -554,7 +663,12 @@ def parameters_and_constants(
             fluid_type=fluid_type,
             use_coolprop=use_coolprop
         ),
-        data=DataConfig(source=data, year=year)
+        data=DataConfig(
+            source=data,
+            year=year,
+            year_start=year_start,
+            year_end=year_end,
+        ),
     )
 
     return config.to_legacy_dict()

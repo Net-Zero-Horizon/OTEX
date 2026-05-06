@@ -57,7 +57,7 @@ def plot_histogram(
         'lcoe': 'LCOE (ct/kWh)',
         'net_power': 'Net Power (kW)',
         'capex': 'CAPEX ($)',
-        'opex': 'OPEX ($/year)'
+        'opex': 'OPEX ($/yr, lifetime-avg)'
     }
     ax.set_xlabel(labels.get(output, output))
     ax.set_ylabel('Frequency')
@@ -312,7 +312,7 @@ def plot_cumulative_distribution(
         'lcoe': 'LCOE (ct/kWh)',
         'net_power': 'Net Power (kW)',
         'capex': 'CAPEX ($)',
-        'opex': 'OPEX ($/year)'
+        'opex': 'OPEX ($/yr, lifetime-avg)'
     }
     ax.set_xlabel(labels.get(output, output))
     ax.set_ylabel('Cumulative Probability')
@@ -365,7 +365,7 @@ def plot_comparison(
         'lcoe': 'LCOE (ct/kWh)',
         'net_power': 'Net Power (kW)',
         'capex': 'CAPEX ($)',
-        'opex': 'OPEX ($/year)'
+        'opex': 'OPEX ($/yr, lifetime-avg)'
     }
     ax.set_ylabel(label_map.get(output, output))
     ax.set_title(f'Comparison of {output.upper()} Distributions')
