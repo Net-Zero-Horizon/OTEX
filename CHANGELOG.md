@@ -87,6 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unspecified source used to build the original CSV). Downstream
   LCOE values for the same site may shift on the order of 1-2 %
   for that reason alone.
+- **Minimum Python version raised to 3.10.** Python 3.9 reached
+  end-of-life in October 2025 and started showing numpy/PyTables
+  binary-compatibility issues on the 0.2.0 dependency set.
 - `time_resolution` default in `DataConfig` is now `'24h'` (lowercase) to
   match pandas ≥ 2.2 frequency aliases. Previously this raised
   `ValueError: Invalid frequency: H` on modern pandas installs.
