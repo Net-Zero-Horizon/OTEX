@@ -155,7 +155,9 @@ def download_data(cost_level,inputs,studied_region,new_path):
                 filename = f'T_{round(depth,0)}m_{year}_{studied_region}_{part+1}.nc'.replace(" ","_")
                 filepath = os.path.join(new_path, filename)
                 files.append(filepath)
-                directory_data_results='Data_Results/'
+                # Ensure the caller's destination exists; copernicusmarine
+                # will write directly into it (no second hard-coded prefix).
+                os.makedirs(new_path, exist_ok=True)
                 print(filepath, flush=True)
                 print(f"    [download_data] Checking if file exists...", flush=True)
 
@@ -203,7 +205,7 @@ def download_data(cost_level,inputs,studied_region,new_path):
                             start_datetime = date_start,
                             end_datetime = date_end,
                             force_download = True,
-                            output_directory = directory_data_results+studied_region.replace(" ","_"),
+                            output_directory = new_path,
                             output_filename = filename,
                             netcdf3_compatible = True  # Avoid h5netcdf dimension scale issues
                         )
@@ -224,7 +226,7 @@ def download_data(cost_level,inputs,studied_region,new_path):
                                 start_datetime = date_start,
                                 end_datetime = date_end,
                                 force_download = True,
-                                output_directory = directory_data_results+studied_region.replace(" ","_"),
+                                output_directory = new_path,
                                 output_filename = filename,
                                 netcdf_compression_enabled = False
                             )

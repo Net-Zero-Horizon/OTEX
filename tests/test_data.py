@@ -176,6 +176,64 @@ class TestCMEMSFunctions:
                 pytest.skip("copernicusmarine not installed")
             raise
 
+    def test_download_data_honours_new_path_argument(self, tmp_path, monkeypatch):
+        """Regression: cmems.download_data must write into the caller's
+        ``new_path`` and not a hard-coded ``Data_Results/<region>/`` prefix.
+
+        We monkey-patch ``copernicusmarine.subset`` to record the
+        ``output_directory`` it would have used; the test asserts that
+        the recorded path equals the ``new_path`` argument.
+        """
+        import os
+        import sys
+        import types
+        from pathlib import Path
+        import otex.data.cmems as cmems_mod
+
+        captured = []
+
+        def fake_subset(**kwargs):
+            captured.append(kwargs)
+            # Touch a file at the expected location so the validity
+            # check on the next iteration finds something.
+            out_dir = kwargs['output_directory']
+            os.makedirs(out_dir, exist_ok=True)
+            (Path(out_dir) / kwargs['output_filename']).write_bytes(b'')
+
+        # Inject a stub copernicusmarine module so the lazy import
+        # inside download_data succeeds without the real SDK.
+        stub = types.SimpleNamespace(subset=fake_subset)
+        monkeypatch.setitem(sys.modules, 'copernicusmarine', stub)
+        monkeypatch.setattr(cmems_mod, 'copernicusmarine', stub)
+        # Skip the netCDF4 sanity-check on the dummy file we created.
+        class _DummyNC:
+            def __init__(self, *a, **kw): pass
+            def close(self): pass
+        monkeypatch.setattr(cmems_mod, 'netCDF4',
+                             types.SimpleNamespace(Dataset=_DummyNC))
+
+        custom_path = str(tmp_path / 'my_custom_run_dir') + os.sep
+
+        inputs = {
+            'length_WW_inlet': 21.6,
+            'length_CW_inlet': 1062.4,
+            'date_start': '2020-01-01 00:00:00',
+            'date_end': '2020-12-31 21:00:00',
+            'year_start': 2020,
+            'year_end': 2020,
+        }
+
+        cmems_mod.download_data('low_cost', inputs, 'Jamaica', custom_path)
+
+        assert captured, "fake copernicusmarine.subset was never called"
+        for call in captured:
+            # The bug regressed when output_directory was 'Data_Results/Jamaica'
+            # regardless of new_path. The fix forwards new_path verbatim.
+            assert call['output_directory'] == custom_path, (
+                f"download_data ignored new_path: wrote to "
+                f"{call['output_directory']!r} instead of {custom_path!r}"
+            )
+
 
 class TestHYCOMModule:
     """Tests for HYCOM data module."""
