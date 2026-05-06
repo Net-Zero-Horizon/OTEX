@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- ``otex.data.cmems.download_data`` ignored its ``new_path`` argument
+  and always wrote NetCDFs to ``Data_Results/<region>/`` relative to
+  the current working directory. Both ``copernicusmarine.subset``
+  call sites now forward ``new_path`` directly, and the directory is
+  created up front. Worked by accident in the default
+  ``regional.py`` flow because that path matched; broke any caller
+  using a custom output directory (HPC scratch dirs, batch scripts
+  with ``--output-dir``, tests). Regression test added.
+
 ## [0.2.0] - Multi-year simulations + on-demand site catalog
 
 ### Added
@@ -265,5 +275,6 @@ pip install SALib>=1.4.0
 
 ---
 
-[Unreleased]: https://github.com/msotocalvo/OTEX/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/msotocalvo/OTEX/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/msotocalvo/OTEX/releases/tag/v0.2.0
 [0.1.0]: https://github.com/msotocalvo/OTEX/releases/tag/v0.1.0
