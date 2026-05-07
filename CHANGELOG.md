@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **CMIP6 climate-scenario support** (delta-method downscaling).
+  ``run_regional_analysis`` accepts a non-historical scenario
+  (``ssp126``/``ssp245``/``ssp370``/``ssp585``) plus a target year;
+  OTEX pulls thetao deltas from a 3-model GCM ensemble
+  (``MPI-ESM1-2-LR``, ``EC-Earth3``, ``CanESM5``) via the public
+  Pangeo CMIP6 Zarr archive on Google Cloud, interpolates them onto
+  each site's coordinates, and adds them to both the warm and cold
+  CMEMS time series before the off-design analysis runs. Output
+  files include a ``_<scenario>_<target_year>`` suffix; default
+  ``historical`` is a no-op equivalent to the 0.2.0 pipeline.
+  - New module :mod:`otex.data.climate` (``fetch_thetao_mean``,
+    ``compute_delta_field``, ``ensemble_delta``, ``delta_at_points``).
+  - New :class:`otex.config.ClimateConfig` and three CLI flags:
+    ``--climate-scenario``, ``--climate-year``, ``--climate-models``.
+  - Per-(model, scenario, period, depth, bbox) Pangeo slices are
+    cached as Parquet under ``~/.otex/cache/cmip6/`` so subsequent
+    runs are sub-millisecond.
+  - Smoke test on Jamaica 2020-2023 under SSP2-4.5 / 2050: median
+    LCOE drops 5.6% vs the historical baseline because surface
+    warming (+1.0 °C) outpaces 1062 m warming (+0.3 °C), widening
+    ΔT and raising AEP by ~1.8%.
+
 ### Performance
 - ``otex.data.cmems._extract_year_data`` rewritten to drop the
   ``np.hstack``-per-match pattern that was O(M²) in memory ops.

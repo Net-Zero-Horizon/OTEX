@@ -29,6 +29,7 @@ tutorials/quickstart
 :caption: User Guide
 
 tutorials/regional_analysis
+tutorials/climate
 tutorials/siting
 tutorials/uncertainty_analysis
 ```

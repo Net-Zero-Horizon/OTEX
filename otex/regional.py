@@ -47,6 +47,9 @@ def run_regional_analysis(
     use_coolprop=True,
     output_dir=None,
     data_source='CMEMS',
+    climate_scenario='historical',
+    climate_year=None,
+    climate_models=None,
 ):
     """
     Run regional OTEC analysis for a specified region.
@@ -96,13 +99,19 @@ def run_regional_analysis(
         year=year,
         year_start=year_start,
         year_end=year_end,
+        climate_scenario=climate_scenario,
+        climate_year=climate_year,
+        climate_models=climate_models,
     )
     year_str = inputs['year_label']
+    climate_suffix = (
+        f"_{inputs['climate_label']}" if inputs.get('climate_enabled') else ''
+    )
 
     region_dir = os.path.join(output_dir, studied_region.replace(" ", "_"))
     run_dir = os.path.join(
         region_dir,
-        f"{studied_region}_{year_str}_{-p_gross/1000}_MW_{cost_level}".replace(" ", "_"),
+        f"{studied_region}_{year_str}{climate_suffix}_{-p_gross/1000}_MW_{cost_level}".replace(" ", "_"),
     )
     os.makedirs(run_dir, exist_ok=True)
 
@@ -184,6 +193,50 @@ def run_regional_analysis(
         T_WW_profiles, T_WW_design, coordinates_WW, id_sites, timestamp, inputs, nan_columns_WW = data_processing(
             files[:len(files) // 2], sites_df, inputs, studied_region, run_dir + os.sep, 'WW', nan_columns_CW
         )
+
+    # ── CMIP6 climate-scenario delta (0.3.0+) ──────────────────────────
+    # When a non-historical scenario is configured, add the per-site
+    # ensemble-mean thetao anomaly to both the warm and cold time
+    # series and to the design temperatures. The shift is constant in
+    # time per site (delta-method assumes the seasonal pattern is
+    # preserved) but varies across sites with the GCM resolution.
+    if inputs.get('climate_enabled'):
+        from otex.data.climate import ensemble_delta, delta_at_points
+        from otex.data.regions import BBox
+
+        cfg = inputs['climate_config']
+        # Bbox covering the site cloud, padded by 1° so GCM cells at
+        # the edge are interpolated cleanly.
+        site_lons = coordinates_CW[:, 0]
+        site_lats = coordinates_CW[:, 1]
+        clim_bbox = BBox(
+            north=float(site_lats.max()) + 1.0,
+            south=float(site_lats.min()) - 1.0,
+            east=float(site_lons.max()) + 1.0,
+            west=float(site_lons.min()) - 1.0,
+        )
+
+        for label, depth_m, T_profiles, T_design in (
+            ('WW', depth_WW, T_WW_profiles, T_WW_design),
+            ('CW', depth_CW, T_CW_profiles, T_CW_design),
+        ):
+            print(f'  [climate] computing ensemble Δ at {depth_m:.0f} m for '
+                  f'{cfg.scenario}/{cfg.target_year} ...', flush=True)
+            ens = ensemble_delta(
+                scenario=cfg.scenario,
+                target_year=cfg.target_year,
+                depth_m=depth_m,
+                bbox=clim_bbox,
+                models=cfg.models,
+                baseline_period=(cfg.baseline_start, cfg.baseline_end),
+                future_window_years=cfg.future_window_years,
+            )
+            d = delta_at_points(site_lons, site_lats, ens)
+            print(f'    {label}: mean Δ = {np.nanmean(d):+.2f} °C '
+                  f'± {np.nanstd(d):.2f} (across sites)')
+            T_profiles += d[None, :]
+            T_design += d[None, :]
+        # Note: T_*_profiles / T_*_design were modified in place above.
 
     # Stuff per-site siting attributes into inputs aligned with id_sites so
     # economics/costs.py can apply hazard multipliers. Always populated (zeros
@@ -270,11 +323,11 @@ def run_regional_analysis(
 
     p_gross_val = inputs['p_gross']
     sites.to_csv(
-        os.path.join(run_dir, f'OTEC_sites_{studied_region}_{year_str}_{-p_gross_val/1000}_MW_{cost_level}.csv'.replace(" ", "_")),
+        os.path.join(run_dir, f'OTEC_sites_{studied_region}_{year_str}{climate_suffix}_{-p_gross_val/1000}_MW_{cost_level}.csv'.replace(" ", "_")),
         index=True, index_label='id', float_format='%.3f', sep=';',
     )
     p_net_profile.to_csv(
-        os.path.join(run_dir, f'net_power_profiles_per_day_{studied_region}_{year_str}_{-p_gross_val/1000}_MW_{cost_level}.csv'.replace(" ", "_")),
+        os.path.join(run_dir, f'net_power_profiles_per_day_{studied_region}_{year_str}{climate_suffix}_{-p_gross_val/1000}_MW_{cost_level}.csv'.replace(" ", "_")),
         index=True, sep=';',
     )
 
@@ -298,7 +351,7 @@ def run_regional_analysis(
         per_year_df.to_csv(
             os.path.join(
                 run_dir,
-                f'OTEC_sites_yearly_{studied_region}_{year_str}_{-p_gross_val/1000}_MW_{cost_level}.csv'.replace(" ", "_"),
+                f'OTEC_sites_yearly_{studied_region}_{year_str}{climate_suffix}_{-p_gross_val/1000}_MW_{cost_level}.csv'.replace(" ", "_"),
             ),
             index=False, float_format='%.3f', sep=';',
         )
@@ -351,8 +404,22 @@ Examples:
                         help='Disable CoolProp (use polynomial correlations)')
     parser.add_argument('--output-dir', default=None,
                         help='Output directory (default: ./Data_Results/)')
+    # CMIP6 climate-scenario flags (0.3.0+).
+    parser.add_argument('--climate-scenario',
+                        choices=['historical', 'ssp126', 'ssp245', 'ssp370', 'ssp585'],
+                        default='historical',
+                        help='CMIP6 scenario for delta-method downscaling '
+                             '(default: historical = no delta).')
+    parser.add_argument('--climate-year', type=int, default=None,
+                        help='Target year for climate delta '
+                             '(e.g. 2050). Required when --climate-scenario != historical.')
+    parser.add_argument('--climate-models', nargs='+', default=None,
+                        help='CMIP6 GCM names to ensemble '
+                             '(default: MPI-ESM1-2-LR EC-Earth3 CanESM5).')
 
     args = parser.parse_args()
+    if args.climate_scenario != 'historical' and args.climate_year is None:
+        parser.error('--climate-year is required when --climate-scenario != historical')
 
     if args.region is None:
         print('++ Setting up seawater temperature data download ++\n')
@@ -375,7 +442,11 @@ Examples:
     print(f'Fluid: {args.fluid}')
     print(f'Cost level: {args.cost}')
     print(f'Data source: {args.data_source}')
-    print(f'CoolProp: {not args.no_coolprop}\n')
+    print(f'CoolProp: {not args.no_coolprop}')
+    if args.climate_scenario != 'historical':
+        models = args.climate_models or 'default ensemble'
+        print(f'Climate: {args.climate_scenario} @ {args.climate_year} ({models})')
+    print()
 
     run_regional_analysis(
         studied_region=args.region,
@@ -389,6 +460,9 @@ Examples:
         use_coolprop=not args.no_coolprop,
         output_dir=args.output_dir,
         data_source=args.data_source,
+        climate_scenario=args.climate_scenario,
+        climate_year=args.climate_year,
+        climate_models=args.climate_models,
     )
 
 

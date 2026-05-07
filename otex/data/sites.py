@@ -116,8 +116,10 @@ def _build_part(
     depth_abs = -elev                               # positive depth in metres
     mask = (depth_abs >= min_depth) & (depth_abs <= max_depth)
     if not np.any(mask):
+        # No ocean cells (landlocked country or fully outside depth range).
+        # Don't include 'id' here — build_sites() adds it after concatenation.
         return pd.DataFrame(columns=[
-            'id', 'longitude', 'latitude', 'region',
+            'longitude', 'latitude', 'region',
             'water_depth', 'dist_shore',
         ])
 

@@ -323,6 +323,40 @@ class SitingConfig:
 
 
 @dataclass
+class ClimateConfig:
+    """CMIP6 climate-scenario configuration (added in 0.3.0).
+
+    When ``scenario != 'historical'`` and ``target_year`` is set, OTEX
+    pulls thetao deltas from the CMIP6 ensemble (see
+    :mod:`otex.data.climate`) and adds them to the CMEMS time series
+    before the off-design analysis runs. ``historical`` is the
+    explicit no-op default — behaviour is identical to 0.2.0.
+    """
+
+    scenario: Literal['historical', 'ssp126', 'ssp245', 'ssp370', 'ssp585'] = 'historical'
+    target_year: Optional[int] = None
+    models: Tuple[str, ...] = ('MPI-ESM1-2-LR', 'EC-Earth3', 'CanESM5')
+
+    # Reference baseline (IPCC AR6 standard).
+    baseline_start: int = 1995
+    baseline_end: int = 2014
+    # Future window centred on `target_year`.
+    future_window_years: int = 30
+
+    @property
+    def enabled(self) -> bool:
+        """True iff a non-historical scenario delta will be applied."""
+        return self.scenario != 'historical' and self.target_year is not None
+
+    @property
+    def label(self) -> str:
+        """Filename-friendly label, e.g. ``'ssp245_2050'`` or ``'historical'``."""
+        if self.enabled:
+            return f'{self.scenario}_{int(self.target_year)}'
+        return 'historical'
+
+
+@dataclass
 class OTEXConfig:
     """
     Complete OTEX configuration.
@@ -348,6 +382,7 @@ class OTEXConfig:
     plant: PlantConfig = field(default_factory=PlantConfig)
     data: DataConfig = field(default_factory=DataConfig)
     siting: SitingConfig = field(default_factory=SitingConfig)
+    climate: ClimateConfig = field(default_factory=ClimateConfig)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to nested dictionary."""
@@ -559,6 +594,15 @@ class OTEXConfig:
             'siting_cyclone_ref_per_yr': self.siting.cyclone_ref_per_yr,
             'siting_cache_dir': self.siting.cache_dir,
             'siting_refresh': self.siting.refresh,
+
+            # Climate scenario (0.3.0+). When `climate_enabled=False` the
+            # downstream pipeline behaves identically to 0.2.0 (no delta).
+            'climate_config': self.climate,
+            'climate_enabled': self.climate.enabled,
+            'climate_label': self.climate.label,
+            'climate_scenario': self.climate.scenario,
+            'climate_target_year': self.climate.target_year,
+            'climate_models': list(self.climate.models),
         }
 
         return legacy
@@ -629,6 +673,9 @@ def parameters_and_constants(
     year: Optional[int] = None,
     year_start: Optional[int] = None,
     year_end: Optional[int] = None,
+    climate_scenario: str = 'historical',
+    climate_year: Optional[int] = None,
+    climate_models: Optional[Tuple[str, ...]] = None,
 ) -> Dict[str, Any]:
     """
     Legacy compatibility function.
@@ -655,6 +702,12 @@ def parameters_and_constants(
     if year is None and year_start is None:
         year_start = 2020
 
+    climate_kwargs = {'scenario': climate_scenario}
+    if climate_year is not None:
+        climate_kwargs['target_year'] = climate_year
+    if climate_models is not None:
+        climate_kwargs['models'] = tuple(climate_models)
+
     config = OTEXConfig(
         plant=PlantConfig(gross_power=p_gross, optimize_depth=optimize_depth),
         economics=Economics(cost_level=cost_level),
@@ -669,6 +722,7 @@ def parameters_and_constants(
             year_start=year_start,
             year_end=year_end,
         ),
+        climate=ClimateConfig(**climate_kwargs),
     )
 
     return config.to_legacy_dict()
