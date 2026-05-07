@@ -3,18 +3,19 @@
 OTEX Regional Batch Analysis
 Run OTEC analysis for multiple regions sequentially.
 
-@author: OTEX Development Team
+This script is a thin batch driver around
+``otex.regional.run_regional_analysis``. The single-region pipeline
+lives in the package; this module only adds the iteration loop and
+optional demand-driven plant sizing.
 """
 
 import os
 import time
-import pandas as pd
-import numpy as np
-import platform
 
-from otex.config import parameters_and_constants
-from otex.plant.off_design_analysis import off_design_analysis
-from otex.data.cmems import download_data, data_processing, load_temperatures
+import numpy as np
+import pandas as pd
+
+from otex.regional import run_regional_analysis
 
 
 def run_region(
@@ -26,10 +27,14 @@ def run_region(
     year_end=None,
     cycle_type='rankine_closed',
     fluid_type='ammonia',
-    use_coolprop=True
+    use_coolprop=True,
+    output_dir=None,
 ):
     """
     Run OTEC analysis for a single region.
+
+    Thin wrapper around :func:`otex.regional.run_regional_analysis`.
+    Kept for backward compatibility with code that imports this script.
 
     Args:
         studied_region: Region name
@@ -41,119 +46,24 @@ def run_region(
         cycle_type: Thermodynamic cycle type
         fluid_type: Working fluid type
         use_coolprop: Whether to use CoolProp
+        output_dir: Output base directory (default: ./Data_Results/)
 
     Returns:
-        tuple: (otec_plants dict, sites_df DataFrame)
+        tuple: (otec_plants dict, sites DataFrame)
     """
-    if year is None and year_start is None:
-        year_start = 2020
-    start = time.time()
-    parent_dir = os.getcwd() + 'Data_Results/'
-
-    if platform.system() == 'Windows':
-        new_path = os.path.join(parent_dir,f'{studied_region}\\'.replace(" ","_"))
-    else :
-        new_path = os.path.join(parent_dir,f'{studied_region}/'.replace(" ","_"))
-
-    if os.path.isdir(new_path):
-        pass
-    else:
-        os.mkdir(new_path)
-
-    inputs = parameters_and_constants(
+    return run_regional_analysis(
+        studied_region=studied_region,
         p_gross=p_gross,
         cost_level=cost_level,
-        data='CMEMS',
-        fluid_type=fluid_type,
-        cycle_type=cycle_type,
-        use_coolprop=use_coolprop,
         year=year,
         year_start=year_start,
         year_end=year_end,
+        cycle_type=cycle_type,
+        fluid_type=fluid_type,
+        use_coolprop=use_coolprop,
+        output_dir=output_dir,
     )
-    year_str = inputs['year_label']
-    
-    # if os.path.isfile(new_path+f'net_power_profiles_{studied_region}_{year}__{-p_gross/1000}_MW_{cost_level}.csv'.replace(" ","_")):
-    #     print(f'{studied_region} already analysed.')
-    # else:
-  
-        
-    depth_WW = inputs['length_WW_inlet']
-    depth_CW = inputs['length_CW_inlet']
-      
-    files = download_data(cost_level,inputs,studied_region,new_path)
-    
-    print('\n++ Processing seawater temperature data ++\n')    
-    
-    sites_df = pd.read_csv('CMEMS_points_with_properties.csv',delimiter=';',encoding='latin-1')
-    sites_df = sites_df[(sites_df['region']==studied_region) & (sites_df['water_depth'] <= inputs['min_depth']) & (sites_df['water_depth'] >= inputs['max_depth'])]   
-    sites_df = sites_df.sort_values(by=['longitude','latitude'],ascending=True)
-    
-    h5_file_WW = os.path.join(new_path, f'T_{round(depth_WW,0)}m_{year_str}_{studied_region}.h5'.replace(" ","_"))
-    h5_file_CW = os.path.join(new_path, f'T_{round(depth_CW,0)}m_{year_str}_{studied_region}.h5'.replace(" ","_"))
-    
-    if os.path.isfile(h5_file_CW):
-        T_CW_profiles, T_CW_design, coordinates_CW, id_sites, timestamp, inputs, nan_columns_CW = load_temperatures(h5_file_CW, inputs)
-        print(f'{h5_file_CW} already exist. No processing necessary.')
-    else:
-        T_CW_profiles, T_CW_design, coordinates_CW, id_sites, timestamp, inputs, nan_columns_CW = data_processing(files[int(len(files)/2):int(len(files))],sites_df,inputs,studied_region,new_path,'CW')
-    
-    if os.path.isfile(h5_file_WW):
-        T_WW_profiles, T_WW_design, coordinates_WW, id_sites, timestamp, inputs, nan_columns_WW = load_temperatures(h5_file_WW, inputs)
-        print(f'{h5_file_WW} already exist. No processing necessary.')
-    else:
-        T_WW_profiles, T_WW_design, coordinates_WW, id_sites, timestamp, inputs, nan_columns_WW = data_processing(files[0:int(len(files)/2)],sites_df,inputs,studied_region,new_path,'WW',nan_columns_CW)
-         
-    otec_plants = off_design_analysis(T_WW_design,T_CW_design,T_WW_profiles,T_CW_profiles,inputs,coordinates_CW,timestamp,studied_region,new_path,cost_level)  
-    
-    sites = pd.DataFrame()
-    sites.index = np.squeeze(id_sites)
-    sites['longitude'] = coordinates_CW[:,0]
-    sites['latitude'] = coordinates_CW[:,1]
-    sites['p_net_nom'] = -otec_plants['p_net_nom'].T/1000
 
-    # Multi-year-aware AEP and LCOE: per-year aggregation, NPV LCOE when
-    # n_years > 1, legacy single-year behaviour otherwise.
-    from otex.economics.timeseries import aggregate_p_net_by_year, annual_energy_kwh
-    p_net_by_year, sim_years = aggregate_p_net_by_year(otec_plants['p_net'], timestamp)
-    annual_energy_MWh = annual_energy_kwh(
-        p_net_by_year, sim_years, inputs['availability_factor']
-    ) / 1000.0
-    sites['AEP'] = annual_energy_MWh.mean(axis=0)
-    if inputs['n_years'] > 1:
-        from otex.economics.costs import lcoe_npv
-        otec_plants['LCOE_legacy'] = otec_plants['LCOE']
-        otec_plants['LCOE'] = lcoe_npv(otec_plants, inputs, p_net_by_year, sim_years)
-
-    sites['CAPEX'] = otec_plants['CAPEX'].T/1000000
-    sites['LCOE'] = otec_plants['LCOE'].T
-    if inputs['n_years'] > 1:
-        sites['LCOE_legacy'] = otec_plants['LCOE_legacy'].T
-        sites['AEP_min'] = annual_energy_MWh.min(axis=0)
-        sites['AEP_p50'] = np.median(annual_energy_MWh, axis=0)
-        sites['AEP_max'] = annual_energy_MWh.max(axis=0)
-        sites['AEP_std'] = annual_energy_MWh.std(axis=0, ddof=0)
-    sites['Configuration'] = otec_plants['Configuration'].T
-    sites['T_WW_min'] = T_WW_design[0,:]
-    sites['T_WW_med'] = T_WW_design[1,:]
-    sites['T_WW_max'] = T_WW_design[2,:]
-    sites['T_CW_min'] = T_CW_design[2,:]
-    sites['T_CW_med'] = T_CW_design[1,:]
-    sites['T_CW_max'] = T_CW_design[0,:]
-    
-    sites = sites.dropna(axis='rows')
-
-    p_net_profile = pd.DataFrame(np.mean(otec_plants['p_net'],axis=1),columns=['p_net'],index=timestamp)
-    
-    p_gross = inputs['p_gross']
-    
-    sites.to_csv(new_path + f'OTEC_sites_{studied_region}_{year_str}_{-p_gross/1000}_MW_{cost_level}.csv'.replace(" ","_"),index=True, index_label='id',float_format='%.3f')
-    p_net_profile.to_csv(new_path + f'net_power_profiles_{studied_region}_{year_str}__{-p_gross/1000}_MW_{cost_level}.csv'.replace(" ","_"),index=True)
-    
-    end = time.time()
-    print('Total runtime: ' + str(round((end-start)/60,2)) + ' minutes.')
-    
-    return otec_plants, sites_df
 
 if __name__ == "__main__":
     import argparse

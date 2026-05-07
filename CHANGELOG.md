@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- ``otex.data.cmems._extract_year_data`` rewritten to drop the
+  ``np.hstack``-per-match pattern that was O(M²) in memory ops.
+  Matches are accumulated into Python lists and concatenated once
+  at the end; T_water is now sliced with a single fancy-index
+  operation instead of one slice per cell. **6× faster** on a
+  200×200 grid with ~2000 matched sites (1.76 s → 0.30 s),
+  scales linearly with grid size.
+
+### Added
+- ``otex.plant.off_design_analysis`` now exposes optional
+  parallelism for the design-sweep loop via the joblib backend.
+  Default remains serial (``OTEX_OFF_DESIGN_NJOBS=1``) — empirical
+  benchmark on a 4-year Jamaica run showed threading n_jobs=-1
+  *increased* wall-clock time (1.84 → 2.15 min) because the
+  vectorised CoolProp PropsSI added in 0.2.0 already saturates
+  the work and the outer joblib layer creates oversubscription.
+  The infrastructure is left in place as opt-in for workloads
+  with much larger configuration sweeps or site counts.
+- End-to-end regression test
+  ``TestRegionalPipelineE2E::test_run_regional_analysis_full_pipeline``
+  exercises the full ``run_regional_analysis`` path with synthetic
+  CMEMS NetCDFs. Runs in ~5 seconds, asserts CSV schema, multi-year
+  columns, output_dir routing, and per-(site, year) row counts.
+
+### Changed
+- ``scripts/regional_batch.py::run_region`` is now a thin wrapper
+  around ``otex.regional.run_regional_analysis``. Removed ~90 LOC
+  of duplicated pipeline code, plus two pre-existing bugs that
+  would have surfaced in non-default usage:
+  - ``parent_dir = os.getcwd() + 'Data_Results/'`` (missing path
+    separator).
+  - ``pd.read_csv('CMEMS_points_with_properties.csv', ...)``
+    referencing the bundled CSV that was deleted in 0.2.0.
+- ``scripts/regional_analysis.py`` deleted entirely — was a stale
+  duplicate of ``otex.regional.run_regional_analysis`` with a
+  docstring still referencing the removed bundled CSV. Use
+  ``from otex.regional import run_regional_analysis`` directly.
+- ``joblib>=1.2`` added as a core dependency (was already a
+  transitive dep via pandas/scikit-learn; pin made explicit).
+
 ### Fixed
 - ``otex.data.cmems.download_data`` ignored its ``new_path`` argument
   and always wrote NetCDFs to ``Data_Results/<region>/`` relative to

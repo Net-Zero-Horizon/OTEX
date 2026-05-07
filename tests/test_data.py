@@ -652,3 +652,150 @@ class TestLoadRegionsLegacyAPI:
             providers=[('a', lambda _: None), ('b', lambda _: None)],
         )
         assert twh is None and src is None and year is None
+
+
+class TestRegionalPipelineE2E:
+    """End-to-end test of run_regional_analysis with synthetic CMEMS data.
+
+    Mocks every network/long-running step and runs the full pipeline:
+    download_data → data_processing → off_design_analysis → NPV → CSV
+    writes. Asserts that the output CSV has the expected schema,
+    sensible numeric values, and is written to the caller's output_dir.
+
+    This is the regression test that would have caught the new_path
+    bug (cmems.py output_directory hardcode) in CI.
+    """
+
+    def _make_synthetic_netcdfs(self, tmp_path, region_name, years,
+                                  lats, lons, ww_depth=20.0, cw_depth=1062.0):
+        """Write paired WW + CW NetCDFs for each year. Returns the path list."""
+        import netCDF4
+        import datetime
+
+        files = []
+        # download_data convention: WW depth files first, then CW.
+        for depth in (ww_depth, cw_depth):
+            for year in years:
+                fname = f'T_{round(depth, 0)}m_{year}_{region_name}_1.nc'
+                fpath = tmp_path / fname
+                t_origin = datetime.datetime(1950, 1, 1)
+                t_year = datetime.datetime(year, 1, 1)
+                hours_offset = (t_year - t_origin).total_seconds() / 3600.0
+                n_days = 60   # Two months — short enough for fast test, long
+                              # enough for rolling-quantile outlier detection.
+                time_vals = hours_offset + np.arange(n_days) * 24.0
+                # WW: ~28°C with ±0.5 seasonal swing. CW: ~5°C constant.
+                if depth < 100:   # warm water
+                    base, swing = 28.0, 0.5
+                else:
+                    base, swing = 5.0, 0.2
+                T = base + swing * np.sin(2 * np.pi * np.arange(n_days) / 30.0)
+
+                ds = netCDF4.Dataset(str(fpath), 'w', format='NETCDF3_CLASSIC')
+                ds.createDimension('time', n_days)
+                ds.createDimension('depth', 1)
+                ds.createDimension('latitude', len(lats))
+                ds.createDimension('longitude', len(lons))
+                ds.createVariable('time', 'f8', ('time',))[:] = time_vals
+                ds.createVariable('depth', 'f4', ('depth',))[:] = [depth]
+                ds.createVariable('latitude', 'f4', ('latitude',))[:] = lats
+                ds.createVariable('longitude', 'f4', ('longitude',))[:] = lons
+                T_grid = ds.createVariable('thetao', 'f4',
+                                            ('time', 'depth', 'latitude', 'longitude'))
+                T_grid[:] = np.broadcast_to(
+                    T[:, None, None, None],
+                    (n_days, 1, len(lats), len(lons)),
+                ).astype('f4')
+                ds.close()
+                files.append(str(fpath))
+        return files
+
+    def _make_synthetic_sites_df(self, region_name, lats, lons):
+        import pandas as pd
+        rows, sid = [], 1
+        for lat in lats:
+            for lon in lons:
+                rows.append({
+                    'longitude': float(lon),
+                    'latitude': float(lat),
+                    'region': region_name,
+                    'water_depth': -1500.0,   # legacy convention: negative = ocean
+                    'dist_shore': 30.0,
+                    'id': sid,
+                })
+                sid += 1
+        return pd.DataFrame(rows)
+
+    def test_run_regional_analysis_full_pipeline(self, tmp_path, monkeypatch):
+        try:
+            import netCDF4   # noqa: F401
+        except ImportError:
+            pytest.skip("netCDF4 not available")
+
+        from pathlib import Path
+        import pandas as pd
+        from otex.regional import run_regional_analysis
+
+        region_name = 'TestLand'
+        years = [2020, 2021]
+        lats = np.round(np.linspace(10.0, 11.0, 4), 3)
+        lons = np.round(np.linspace(-80.0, -79.0, 4), 3)
+
+        nc_files = self._make_synthetic_netcdfs(
+            tmp_path, region_name, years, lats, lons,
+        )
+        sites_df = self._make_synthetic_sites_df(region_name, lats, lons)
+
+        # Stub the network/region resolution functions so the pipeline
+        # never reaches Natural Earth, ETOPO, or CMEMS.
+        import otex.data.cmems as cmems_mod
+        import otex.regional as regional_mod
+
+        def fake_download(cost_level, inputs, studied_region, new_path):
+            return nc_files
+
+        def fake_load_sites(region, **kwargs):
+            return sites_df
+
+        monkeypatch.setattr(cmems_mod, 'download_data', fake_download)
+        monkeypatch.setattr(regional_mod, 'load_sites', fake_load_sites)
+
+        # Run the full pipeline through the public API. use_coolprop=False
+        # keeps the test independent of CoolProp (polynomial fluid props).
+        out_dir = str(tmp_path / 'out')
+        otec_plants, sites = run_regional_analysis(
+            studied_region=region_name,
+            p_gross=-50000,            # 50 MW for a fast off-design sweep
+            cost_level='low_cost',
+            year_start=years[0],
+            year_end=years[-1],
+            cycle_type='rankine_closed',
+            fluid_type='ammonia',
+            use_coolprop=False,
+            output_dir=out_dir,
+        )
+
+        # 1. Result objects look right.
+        assert len(sites) > 0, "No sites survived the pipeline"
+        assert 'LCOE' in sites.columns
+        assert 'AEP' in sites.columns
+        assert sites['LCOE'].notna().all(), "LCOE has NaN entries"
+        assert (sites['LCOE'] > 0).all(), "LCOE non-positive"
+        assert (sites['AEP'] > 0).all(), "AEP non-positive"
+
+        # 2. Multi-year columns are present (n_years=2 > 1).
+        for col in ('LCOE_legacy', 'AEP_min', 'AEP_p50', 'AEP_max', 'AEP_std'):
+            assert col in sites.columns, f"Missing multi-year column: {col}"
+
+        # 3. CSVs landed in the caller's output_dir (regression test for
+        #    the new_path bug fix).
+        run_dir = Path(out_dir) / region_name / f'{region_name}_2020-2021_50.0_MW_low_cost'
+        sites_csv = run_dir / f'OTEC_sites_{region_name}_2020-2021_50.0_MW_low_cost.csv'
+        yearly_csv = run_dir / f'OTEC_sites_yearly_{region_name}_2020-2021_50.0_MW_low_cost.csv'
+        assert sites_csv.exists(), f"Site CSV not written to {sites_csv}"
+        assert yearly_csv.exists(), f"Yearly CSV not written to {yearly_csv}"
+
+        # 4. Yearly CSV has one row per (site, year).
+        yearly = pd.read_csv(yearly_csv, sep=';')
+        assert len(yearly) == len(sites) * len(years)
+        assert set(yearly['year'].unique()) == set(years)
