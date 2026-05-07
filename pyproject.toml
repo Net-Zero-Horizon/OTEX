@@ -52,10 +52,6 @@ dependencies = [
     "pyproj>=3.4",
     "requests>=2.28",
     "pyarrow>=10.0",
-    # Parallelism backend for off-design configuration sweep. joblib is
-    # a transitive dependency of pandas/scikit-learn already, but pin
-    # it explicitly so users get a known-good version.
-    "joblib>=1.2",
 ]
 
 [project.optional-dependencies]

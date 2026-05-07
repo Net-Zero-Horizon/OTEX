@@ -18,25 +18,10 @@ import os
 import time
 
 import pandas as pd
-from joblib import Parallel, delayed
 
 from .sizing import otec_sizing
 from ..economics.costs import capex_opex_lcoe
 from .operation import otec_operation
-
-# Parallelism for the design-sweep loop. The default is serial because
-# CoolProp 7.x's vectorised PropsSI already saturates the inner work
-# and adding an outer joblib layer creates oversubscription that
-# *increases* wall-clock time on typical workloads (e.g. the 4-year
-# Jamaica benchmark went from 1.84 min serial to 2.15 min with
-# joblib threading n_jobs=-1).
-#
-# Users with much larger configuration sweeps (custom dT grids) or
-# very large site counts can opt in via ``OTEX_OFF_DESIGN_NJOBS=-1``
-# (or any positive integer). ``OTEX_OFF_DESIGN_BACKEND`` selects the
-# joblib backend (``threading`` / ``loky`` / ``multiprocessing``).
-_DEFAULT_NJOBS = int(os.environ.get("OTEX_OFF_DESIGN_NJOBS", "1"))
-_DEFAULT_BACKEND = os.environ.get("OTEX_OFF_DESIGN_BACKEND", "threading")
 
 def safe_hdf_write(df, filepath, key, mode='a', max_retries=30, retry_delay=1.0):
     """
@@ -185,43 +170,26 @@ def off_design_analysis(T_WW_design,T_CW_design,T_WW_profiles,T_CW_profiles,inpu
     else:    
         lcoe_matrix = np.empty((len(T_WW_design),len(T_CW_design),np.shape(T_WW_profiles)[1]),dtype=np.float64)
     
-    # Each (i_cw, i_ww) pair is independent: on_design_analysis and
-    # otec_operation only read from `inputs`. The body lives in a
-    # closure so the optional joblib path can dispatch it.
-    def _run_config(index_cw, index_ww, t_cw_design, t_ww_design):
-        plant_nominal, all_capex_opex = on_design_analysis(
-            t_ww_design, t_cw_design, inputs, cost_level
-        )
-        plant_off = otec_operation(plant_nominal, T_WW_profiles, T_CW_profiles, inputs)
-        plant_off.update(plant_nominal)
-        return index_cw, index_ww, plant_off, all_capex_opex
-
-    if _DEFAULT_NJOBS == 1:
-        # Serial path — bypass joblib entirely to avoid its per-task
-        # bookkeeping overhead.
-        config_results = [
-            _run_config(i_cw, i_ww, t_cw, t_ww)
-            for i_cw, t_cw in enumerate(T_CW_design)
-            for i_ww, t_ww in enumerate(T_WW_design)
-        ]
-    else:
-        config_results = Parallel(n_jobs=_DEFAULT_NJOBS, backend=_DEFAULT_BACKEND)(
-            delayed(_run_config)(i_cw, i_ww, t_cw, t_ww)
-            for i_cw, t_cw in enumerate(T_CW_design)
-            for i_ww, t_ww in enumerate(T_WW_design)
-        )
-
-    # Aggregate results back into the matrices the rest of the
-    # function expects, preserving the original (i_cw * 3 + i_ww + 1)
-    # configuration numbering.
     CAPEX_OPEX_for_comparison = []
-    for index_cw, index_ww, otec_plant_off_design, all_CAPEX_OPEX in config_results:
-        results_matrix[index_ww + index_cw * 3 + 1] = otec_plant_off_design
-        if T_WW_design.ndim == 1:
-            lcoe_matrix[index_cw][index_ww] = otec_plant_off_design['LCOE']
-        else:
-            lcoe_matrix[index_cw][index_ww][:] = otec_plant_off_design['LCOE']
-        CAPEX_OPEX_for_comparison.append([all_CAPEX_OPEX])
+    for index_cw, t_cw_design in enumerate(T_CW_design):
+        for index_ww, t_ww_design in enumerate(T_WW_design):
+
+            otec_plant_nominal_lowest_lcoe, all_CAPEX_OPEX = on_design_analysis(
+                t_ww_design, t_cw_design, inputs, cost_level
+            )
+            otec_plant_off_design = otec_operation(
+                otec_plant_nominal_lowest_lcoe, T_WW_profiles, T_CW_profiles, inputs
+            )
+            otec_plant_off_design.update(otec_plant_nominal_lowest_lcoe)
+
+            results_matrix[index_ww + index_cw * 3 + 1] = otec_plant_off_design
+
+            if T_WW_design.ndim == 1:
+                lcoe_matrix[index_cw][index_ww] = otec_plant_off_design['LCOE']
+            else:
+                lcoe_matrix[index_cw][index_ww][:] = otec_plant_off_design['LCOE']
+
+            CAPEX_OPEX_for_comparison.append([all_CAPEX_OPEX])
     
     lcoe_matrix = np.nan_to_num(lcoe_matrix,nan=10000) # replace NaN with unreasonably high value
               

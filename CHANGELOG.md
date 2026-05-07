@@ -17,15 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scales linearly with grid size.
 
 ### Added
-- ``otex.plant.off_design_analysis`` now exposes optional
-  parallelism for the design-sweep loop via the joblib backend.
-  Default remains serial (``OTEX_OFF_DESIGN_NJOBS=1``) — empirical
-  benchmark on a 4-year Jamaica run showed threading n_jobs=-1
-  *increased* wall-clock time (1.84 → 2.15 min) because the
-  vectorised CoolProp PropsSI added in 0.2.0 already saturates
-  the work and the outer joblib layer creates oversubscription.
-  The infrastructure is left in place as opt-in for workloads
-  with much larger configuration sweeps or site counts.
 - End-to-end regression test
   ``TestRegionalPipelineE2E::test_run_regional_analysis_full_pipeline``
   exercises the full ``run_regional_analysis`` path with synthetic
@@ -45,8 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   duplicate of ``otex.regional.run_regional_analysis`` with a
   docstring still referencing the removed bundled CSV. Use
   ``from otex.regional import run_regional_analysis`` directly.
-- ``joblib>=1.2`` added as a core dependency (was already a
-  transitive dep via pandas/scikit-learn; pin made explicit).
 
 ### Fixed
 - ``otex.data.cmems.download_data`` ignored its ``new_path`` argument
