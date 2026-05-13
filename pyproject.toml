@@ -98,6 +98,7 @@ Issues = "https://github.com/otex-dev/otex/issues"
 
 [project.scripts]
 otex-regional = "otex.regional:main"
+otex-regional-optimal = "otex.optimization.cli:main"
 otex-uncertainty = "otex.analysis.cli:main"
 
 [tool.setuptools.packages.find]

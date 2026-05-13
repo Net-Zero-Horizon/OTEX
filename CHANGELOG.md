@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Mode Inverso — per-site formal design optimisation.** A second
+  operation mode parallel to the existing forward pipeline. Instead
+  of asking *"what's the LCOE if I install P_gross MW?"*, the new
+  ``otex-regional-optimal`` command answers *"what plant design
+  minimises LCOE at each site?"*. The optimiser solves a 4-D
+  continuous NLP per site over ``x = (p_gross, dT_WW, dT_CW,
+  depth_CW)`` via L-BFGS-B on a normalised [0,1] cube, with a
+  quadratic penalty method on both physical constraints (pinch
+  points, pipe diameter, parasitic ratio, bathymetric fit, ΔT
+  margin) and **user-supplied exogenous caps** (max AEP, CAPEX,
+  p_net, p_gross, or parasitic ratio) — at least one user cap is
+  required for an interior optimum because OTEX's modelled cost
+  function is monotone in p_gross. Categorical choices (cycle,
+  fluid, installation type) stay exogenous. The optimiser uses a
+  warm-start that respects the active user cap to converge 3-10×
+  faster than from the box centre. New module ``otex.optimization``
+  (``DesignVector``, ``SiteContext``, ``UserConstraints``,
+  ``evaluate``, ``optimize_site``, ``run_regional_optimization``).
+  Tutorial: ``docs/tutorials/optimal_sizing.md``. End-to-end smoke
+  on Jamaica 2020-2023 with ``--max-p-gross-MW 120 --no-coolprop``:
+  242/242 sites feasible in 87 s (0.36 s/site), median LCOE 22.63
+  ¢/kWh vs 24.97 in forward mode @ 100 MW fixed (−8.6 %).
 - **CMIP6 climate-scenario support** (delta-method downscaling).
   ``run_regional_analysis`` accepts a non-historical scenario
   (``ssp126``/``ssp245``/``ssp370``/``ssp585``) plus a target year;

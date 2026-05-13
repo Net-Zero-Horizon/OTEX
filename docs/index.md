@@ -30,6 +30,7 @@ tutorials/quickstart
 
 tutorials/regional_analysis
 tutorials/climate
+tutorials/optimal_sizing
 tutorials/siting
 tutorials/uncertainty_analysis
 ```
