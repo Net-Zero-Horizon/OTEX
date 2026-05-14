@@ -45,6 +45,8 @@ def run_regional_analysis(
     cycle_type='rankine_closed',
     fluid_type='ammonia',
     use_coolprop=True,
+    installation_type='offshore',
+    lat_max=None,
     output_dir=None,
     data_source='CMEMS',
     climate_scenario='historical',
@@ -96,6 +98,7 @@ def run_regional_analysis(
         fluid_type=fluid_type,
         cycle_type=cycle_type,
         use_coolprop=use_coolprop,
+        installation_type=installation_type,
         year=year,
         year_start=year_start,
         year_end=year_end,
@@ -109,9 +112,11 @@ def run_regional_analysis(
     )
 
     region_dir = os.path.join(output_dir, studied_region.replace(" ", "_"))
+    config_tag = f"{cycle_type}_{fluid_type}_{installation_type}"
     run_dir = os.path.join(
         region_dir,
-        f"{studied_region}_{year_str}{climate_suffix}_{-p_gross/1000}_MW_{cost_level}".replace(" ", "_"),
+        f"{studied_region}_{config_tag}_{year_str}{climate_suffix}_"
+        f"{-p_gross/1000}_MW_{cost_level}".replace(" ", "_"),
     )
     os.makedirs(run_dir, exist_ok=True)
 
@@ -138,6 +143,7 @@ def run_regional_analysis(
         # depth API.
         min_depth=abs(inputs['min_depth']),
         max_depth=abs(inputs['max_depth']),
+        lat_max=lat_max,
     )
     sites_df = sites_df[
         (sites_df['water_depth'] <= inputs['min_depth'])
@@ -322,12 +328,16 @@ def run_regional_analysis(
     )
 
     p_gross_val = inputs['p_gross']
+    # File-name stem encodes (cycle, fluid, install) so that running multiple
+    # configurations against the same region produces side-by-side outputs
+    # instead of overwriting each other.
+    stem = f"{studied_region}_{config_tag}_{year_str}{climate_suffix}_{-p_gross_val/1000}_MW_{cost_level}"
     sites.to_csv(
-        os.path.join(run_dir, f'OTEC_sites_{studied_region}_{year_str}{climate_suffix}_{-p_gross_val/1000}_MW_{cost_level}.csv'.replace(" ", "_")),
+        os.path.join(run_dir, f'OTEC_sites_{stem}.csv'.replace(" ", "_")),
         index=True, index_label='id', float_format='%.3f', sep=';',
     )
     p_net_profile.to_csv(
-        os.path.join(run_dir, f'net_power_profiles_per_day_{studied_region}_{year_str}{climate_suffix}_{-p_gross_val/1000}_MW_{cost_level}.csv'.replace(" ", "_")),
+        os.path.join(run_dir, f'net_power_profiles_per_day_{stem}.csv'.replace(" ", "_")),
         index=True, sep=';',
     )
 
@@ -351,7 +361,7 @@ def run_regional_analysis(
         per_year_df.to_csv(
             os.path.join(
                 run_dir,
-                f'OTEC_sites_yearly_{studied_region}_{year_str}{climate_suffix}_{-p_gross_val/1000}_MW_{cost_level}.csv'.replace(" ", "_"),
+                f'OTEC_sites_yearly_{stem}.csv'.replace(" ", "_"),
             ),
             index=False, float_format='%.3f', sep=';',
         )

@@ -789,9 +789,13 @@ class TestRegionalPipelineE2E:
 
         # 3. CSVs landed in the caller's output_dir (regression test for
         #    the new_path bug fix).
-        run_dir = Path(out_dir) / region_name / f'{region_name}_2020-2021_50.0_MW_low_cost'
-        sites_csv = run_dir / f'OTEC_sites_{region_name}_2020-2021_50.0_MW_low_cost.csv'
-        yearly_csv = run_dir / f'OTEC_sites_yearly_{region_name}_2020-2021_50.0_MW_low_cost.csv'
+        # 0.3.0 changed the run_dir + CSV layout to embed the
+        # cycle/fluid/install combo so multiple configurations can
+        # coexist for the same region.
+        stem = f'{region_name}_rankine_closed_ammonia_offshore_2020-2021_50.0_MW_low_cost'
+        run_dir = Path(out_dir) / region_name / stem
+        sites_csv = run_dir / f'OTEC_sites_{stem}.csv'
+        yearly_csv = run_dir / f'OTEC_sites_yearly_{stem}.csv'
         assert sites_csv.exists(), f"Site CSV not written to {sites_csv}"
         assert yearly_csv.exists(), f"Yearly CSV not written to {yearly_csv}"
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "otex"
-version = "0.2.0"
+version = "0.3.0"
 description = "OTEX - Ocean Thermal Energy eXchange: OTEC plant design, simulation, and analysis"
 readme = "README.md"
 license = {text = "MIT"}

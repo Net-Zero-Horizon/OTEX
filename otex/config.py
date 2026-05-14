@@ -670,6 +670,7 @@ def parameters_and_constants(
     cycle_type: str = 'rankine_closed',
     use_coolprop: bool = True,
     optimize_depth: bool = False,
+    installation_type: str = 'offshore',
     year: Optional[int] = None,
     year_start: Optional[int] = None,
     year_end: Optional[int] = None,
@@ -709,7 +710,11 @@ def parameters_and_constants(
         climate_kwargs['models'] = tuple(climate_models)
 
     config = OTEXConfig(
-        plant=PlantConfig(gross_power=p_gross, optimize_depth=optimize_depth),
+        plant=PlantConfig(
+            gross_power=p_gross,
+            optimize_depth=optimize_depth,
+            installation_type=installation_type,
+        ),
         economics=Economics(cost_level=cost_level),
         cycle=CycleConfig(
             cycle_type=cycle_type,

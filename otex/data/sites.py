@@ -59,11 +59,12 @@ def _cache_key(
     max_depth: float,
     grid_resolution: float,
     offshore_buffer: float,
+    lat_max: Optional[float] = None,
 ) -> str:
     payload = repr((
         [b.as_tuple() for b in bboxes],
         region_label, min_depth, max_depth,
-        grid_resolution, offshore_buffer,
+        grid_resolution, offshore_buffer, lat_max,
     )).encode()
     return hashlib.sha1(payload).hexdigest()[:14]
 
@@ -150,6 +151,7 @@ def build_sites(
     max_depth: float = 3000.0,
     grid_resolution: float = _DEFAULT_GRID_RES_DEG,
     offshore_buffer_deg: float = _DEFAULT_OFFSHORE_BUFFER_DEG,
+    lat_max: Optional[float] = None,
     refresh: bool = False,
 ) -> pd.DataFrame:
     """Build a feasible OTEC sites DataFrame on demand.
@@ -214,10 +216,11 @@ def build_sites(
         bboxes = [BBox(north=maxy, south=miny, east=maxx, west=minx)]
         region_label = "custom_polygon"
 
-    # Cache lookup.
+    # Cache lookup. lat_max is part of the key so a run with the filter
+    # active doesn't share its cache with an unfiltered run.
     cache_path = _cache_dir() / (_cache_key(
         bboxes, region_label, min_depth, max_depth,
-        grid_resolution, offshore_buffer_deg,
+        grid_resolution, offshore_buffer_deg, lat_max,
     ) + '.parquet')
     if cache_path.exists() and not refresh:
         return pd.read_parquet(cache_path)
@@ -244,6 +247,12 @@ def build_sites(
             axis=1,
         )
         sites = sites[keep].reset_index(drop=True)
+
+    # Optional latitude cap (e.g. lat_max=40 restricts to ±40° for OTEC's
+    # tropical-and-subtropical operating envelope — outside that band the
+    # thermal gradient drops below ~18 °C).
+    if lat_max is not None and not sites.empty:
+        sites = sites[sites['latitude'].abs() <= float(lat_max)].reset_index(drop=True)
 
     # Assign deterministic integer site IDs (lon-lat sorted within each part).
     sites = sites.sort_values(['longitude', 'latitude']).reset_index(drop=True)
