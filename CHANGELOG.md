@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-14
+
+### Fixed
+- Uncertainty / sensitivity analysis silently hard-coded the
+  thermodynamic configuration to ``rankine_closed`` + ``ammonia`` +
+  ``offshore``. Calling :class:`MonteCarloAnalysis`,
+  :class:`TornadoAnalysis` or :class:`SobolAnalysis` against any
+  other cycle (Kalina, Uehara, Open / Hybrid Rankine), working
+  fluid, or onshore installation produced LCOE uncertainty bounds
+  for the *wrong* plant — the per-simulation worker rebuilt
+  ``inputs`` via ``parameters_and_constants(p_gross=..., cost_level=...)``
+  with no other arguments, so the default cycle / fluid / install
+  came back regardless of what the user requested.
+  ``cycle_type``, ``fluid_type``, ``installation_type`` and
+  ``use_coolprop`` are now first-class parameters on every
+  uncertainty / sensitivity class and are forwarded into the
+  per-simulation arg tuple consumed by ``_run_single_simulation``.
+
 ## [0.3.0] - 2026-05-14
 
 ### Added
@@ -352,7 +370,8 @@ pip install SALib>=1.4.0
 
 ---
 
-[Unreleased]: https://github.com/msotocalvo/OTEX/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/msotocalvo/OTEX/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/msotocalvo/OTEX/releases/tag/v0.3.1
 [0.3.0]: https://github.com/msotocalvo/OTEX/releases/tag/v0.3.0
 [0.2.0]: https://github.com/msotocalvo/OTEX/releases/tag/v0.2.0
 [0.1.0]: https://github.com/msotocalvo/OTEX/releases/tag/v0.1.0

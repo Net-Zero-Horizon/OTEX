@@ -161,7 +161,11 @@ def _run_model(
     T_CW: float,
     param_overrides: Dict[str, float],
     p_gross: float = -100000,
-    cost_level: str = 'low_cost'
+    cost_level: str = 'low_cost',
+    cycle_type: str = 'rankine_closed',
+    fluid_type: str = 'ammonia',
+    installation_type: str = 'offshore',
+    use_coolprop: bool = True,
 ) -> Dict[str, float]:
     """
     Run OTEC model with parameter overrides.
@@ -172,6 +176,9 @@ def _run_model(
         param_overrides: Dictionary of parameter names to values
         p_gross: Gross power output
         cost_level: Cost scenario
+        cycle_type, fluid_type, installation_type, use_coolprop: forwarded
+            to ``parameters_and_constants`` so Sobol/Tornado evaluate the
+            *requested* cycle (not the default rankine_closed).
 
     Returns:
         Dictionary with 'lcoe', 'net_power', 'capex', 'opex'
@@ -181,7 +188,12 @@ def _run_model(
     from otex.economics.costs import capex_opex_lcoe
 
     try:
-        inputs = parameters_and_constants(p_gross=p_gross, cost_level=cost_level)
+        inputs = parameters_and_constants(
+            p_gross=p_gross, cost_level=cost_level,
+            cycle_type=cycle_type, fluid_type=fluid_type,
+            installation_type=installation_type,
+            use_coolprop=use_coolprop,
+        )
 
         # Apply parameter overrides
         for name, value in param_overrides.items():
@@ -260,19 +272,17 @@ class SobolAnalysis:
         calc_second_order: bool = False,
         config: Optional[UncertaintyConfig] = None,
         p_gross: float = -100000,
-        cost_level: str = 'low_cost'
+        cost_level: str = 'low_cost',
+        cycle_type: str = 'rankine_closed',
+        fluid_type: str = 'ammonia',
+        installation_type: str = 'offshore',
+        use_coolprop: bool = True,
     ):
         """
         Initialize Sobol analysis.
-
-        Args:
-            T_WW: Warm water temperature (°C)
-            T_CW: Cold water temperature (°C)
-            n_samples: Number of base samples (total = n_samples * (2*d + 2))
-            calc_second_order: Whether to compute second-order indices
-            config: Uncertainty configuration
-            p_gross: Gross power output (kW)
-            cost_level: Cost scenario
+        cycle_type/fluid_type/installation_type/use_coolprop are forwarded
+        to ``parameters_and_constants`` so the indices reflect the
+        requested cycle, not the silent default.
         """
         self.T_WW = T_WW
         self.T_CW = T_CW
@@ -281,6 +291,10 @@ class SobolAnalysis:
         self.config = config or UncertaintyConfig()
         self.p_gross = p_gross
         self.cost_level = cost_level
+        self.cycle_type = cycle_type
+        self.fluid_type = fluid_type
+        self.installation_type = installation_type
+        self.use_coolprop = use_coolprop
 
     def run(self, output: str = 'lcoe', show_progress: bool = True) -> SobolResults:
         """
@@ -323,7 +337,9 @@ class SobolAnalysis:
             overrides = dict(zip(problem['names'], param_values[i]))
             result = _run_model(
                 self.T_WW, self.T_CW, overrides,
-                self.p_gross, self.cost_level
+                self.p_gross, self.cost_level,
+                self.cycle_type, self.fluid_type,
+                self.installation_type, self.use_coolprop,
             )
             Y[i] = result[output]
 
@@ -371,19 +387,22 @@ class TornadoAnalysis:
         variation_pct: float = 10.0,
         config: Optional[UncertaintyConfig] = None,
         p_gross: float = -100000,
-        cost_level: str = 'low_cost'
+        cost_level: str = 'low_cost',
+        cycle_type: str = 'rankine_closed',
+        fluid_type: str = 'ammonia',
+        installation_type: str = 'offshore',
+        use_coolprop: bool = True,
     ):
         """
         Initialize Tornado analysis.
-
-        Args:
-            T_WW: Warm water temperature (°C)
-            T_CW: Cold water temperature (°C)
-            variation_pct: Percentage variation from nominal (default 10%)
-            config: Uncertainty configuration (uses parameter bounds if provided)
-            p_gross: Gross power output (kW)
-            cost_level: Cost scenario
+        cycle_type/fluid_type/installation_type/use_coolprop are forwarded
+        to ``parameters_and_constants`` so the swings reflect the
+        requested cycle, not the silent default.
         """
+        self.cycle_type = cycle_type
+        self.fluid_type = fluid_type
+        self.installation_type = installation_type
+        self.use_coolprop = use_coolprop
         self.T_WW = T_WW
         self.T_CW = T_CW
         self.variation_pct = variation_pct
@@ -426,7 +445,9 @@ class TornadoAnalysis:
         nominal_overrides = {p.name: p.nominal for p in params}
         baseline_result = _run_model(
             self.T_WW, self.T_CW, nominal_overrides,
-            self.p_gross, self.cost_level
+            self.p_gross, self.cost_level,
+            self.cycle_type, self.fluid_type,
+            self.installation_type, self.use_coolprop,
         )
         baseline = baseline_result[output]
 
@@ -451,7 +472,9 @@ class TornadoAnalysis:
             overrides[param.name] = low_val
             result_low = _run_model(
                 self.T_WW, self.T_CW, overrides,
-                self.p_gross, self.cost_level
+                self.p_gross, self.cost_level,
+                self.cycle_type, self.fluid_type,
+                self.installation_type, self.use_coolprop,
             )
             low_values[i] = result_low[output]
 
@@ -459,7 +482,9 @@ class TornadoAnalysis:
             overrides[param.name] = high_val
             result_high = _run_model(
                 self.T_WW, self.T_CW, overrides,
-                self.p_gross, self.cost_level
+                self.p_gross, self.cost_level,
+                self.cycle_type, self.fluid_type,
+                self.installation_type, self.use_coolprop,
             )
             high_values[i] = result_high[output]
 

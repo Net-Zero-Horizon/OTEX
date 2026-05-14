@@ -135,7 +135,9 @@ def _run_single_simulation(args: tuple) -> Dict[str, float]:
     Returns:
         Dictionary with simulation results
     """
-    sample_values, param_names, T_WW, T_CW, p_gross, cost_level, base_inputs = args
+    (sample_values, param_names, T_WW, T_CW, p_gross, cost_level,
+     base_inputs, cycle_type, fluid_type, installation_type,
+     use_coolprop) = args
 
     # Import here to avoid pickling issues in multiprocessing
     from otex.config import parameters_and_constants
@@ -143,8 +145,15 @@ def _run_single_simulation(args: tuple) -> Dict[str, float]:
     from otex.economics.costs import capex_opex_lcoe
 
     try:
-        # Get fresh inputs dict
-        inputs = parameters_and_constants(p_gross=p_gross, cost_level=cost_level)
+        # Get fresh inputs dict — cycle/fluid/install must propagate so
+        # uncertainty bounds are evaluated against the *requested* cycle
+        # (Kalina, Uehara, etc.), not the silent default rankine_closed.
+        inputs = parameters_and_constants(
+            p_gross=p_gross, cost_level=cost_level,
+            cycle_type=cycle_type, fluid_type=fluid_type,
+            installation_type=installation_type,
+            use_coolprop=use_coolprop,
+        )
 
         # Apply sampled parameter values
         for name, value in zip(param_names, sample_values):
@@ -228,7 +237,11 @@ class MonteCarloAnalysis:
         T_CW: float,
         config: Optional[UncertaintyConfig] = None,
         p_gross: float = -100000,
-        cost_level: str = 'low_cost'
+        cost_level: str = 'low_cost',
+        cycle_type: str = 'rankine_closed',
+        fluid_type: str = 'ammonia',
+        installation_type: str = 'offshore',
+        use_coolprop: bool = True,
     ):
         """
         Initialize Monte Carlo analysis.
@@ -239,12 +252,20 @@ class MonteCarloAnalysis:
             config: Uncertainty configuration (uses defaults if None)
             p_gross: Gross power output (kW, negative)
             cost_level: Cost scenario ('low_cost' or 'high_cost')
+            cycle_type: Thermodynamic cycle to evaluate.
+            fluid_type: Working fluid.
+            installation_type: 'offshore' or 'onshore'.
+            use_coolprop: Whether to use CoolProp for fluid properties.
         """
         self.T_WW = T_WW
         self.T_CW = T_CW
         self.config = config or UncertaintyConfig()
         self.p_gross = p_gross
         self.cost_level = cost_level
+        self.cycle_type = cycle_type
+        self.fluid_type = fluid_type
+        self.installation_type = installation_type
+        self.use_coolprop = use_coolprop
 
         self._samples: Optional[np.ndarray] = None
 
@@ -300,7 +321,9 @@ class MonteCarloAnalysis:
         # Prepare arguments for each simulation
         args_list = [
             (samples[i], param_names, self.T_WW, self.T_CW,
-             self.p_gross, self.cost_level, None)
+             self.p_gross, self.cost_level, None,
+             self.cycle_type, self.fluid_type, self.installation_type,
+             self.use_coolprop)
             for i in range(n_samples)
         ]
 
