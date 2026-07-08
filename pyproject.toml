@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "otex"
-version = "0.3.1"
+version = "0.4.0"
 description = "OTEX - Ocean Thermal Energy eXchange: OTEC plant design, simulation, and analysis"
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "MPL-2.0"}
 requires-python = ">=3.10"
 authors = [
     {name = "OTEX Development Team"},
@@ -23,7 +23,7 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -52,6 +52,17 @@ dependencies = [
     "pyproj>=3.4",
     "requests>=2.28",
     "pyarrow>=10.0",
+    # CMIP6 climate scenarios (0.3.0+): the climate.ensemble_delta path
+    # reads Pangeo's Zarr archive on Google Cloud Storage. Without these
+    # two, ``xr.open_zarr`` raises "Please install gcsfs to access
+    # Google Storage". Listed in core deps (not extras) because climate
+    # scenarios are surfaced by the default `run_regional_analysis` API.
+    # zarr is pinned to <3 because xarray's CMIP6 time-decoding path
+    # breaks on the new zarr 3.x format/codec layout (we see "Failed to
+    # decode variable 'time': cannot reshape ...").  Once xarray ≥
+    # 2026.x lands proper zarr-3 support we can drop the upper bound.
+    "zarr>=2.10,<3",
+    "gcsfs>=2023.1",
 ]
 
 [project.optional-dependencies]
@@ -91,10 +102,11 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/otex-dev/otex"
+Homepage = "https://github.com/Net-Zero-Horizon/OTEX"
 Documentation = "https://otex.readthedocs.io"
-Repository = "https://github.com/otex-dev/otex"
-Issues = "https://github.com/otex-dev/otex/issues"
+Repository = "https://github.com/Net-Zero-Horizon/OTEX"
+Issues = "https://github.com/Net-Zero-Horizon/OTEX/issues"
+Changelog = "https://github.com/Net-Zero-Horizon/OTEX/blob/main/CHANGELOG.md"
 
 [project.scripts]
 otex-regional = "otex.regional:main"

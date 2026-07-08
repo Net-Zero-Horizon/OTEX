@@ -1,0 +1,42 @@
+OTEX — Ocean Thermal Energy eXchange
+====================================
+
+Copyright (c) 2024–2026 OTEX contributors.
+Licensed under the Mozilla Public License, v. 2.0 (see LICENSE).
+
+
+Third-party attributions
+------------------------
+
+Portions of OTEX are derived from **pyOTEC** by Jannis K. A. Langer
+(Delft University of Technology), originally released under the
+European Union Public Licence v. 1.2 (EUPL-1.2):
+
+    https://github.com/JKALanger/pyOTEC
+
+The following files in this repository incorporate substantial code
+from pyOTEC:
+
+    otex/economics/costs.py
+    otex/plant/off_design_analysis.py
+    otex/plant/sizing.py
+    otex/plant/components.py
+    otex/plant/operation.py
+    otex/data/cmems.py
+
+Under Article 5 of the EUPL-1.2 (compatibility clause) and its
+Appendix, the Mozilla Public Licence v. 2.0 is explicitly listed as a
+compatible licence. This project therefore distributes the combined
+work (original OTEX code together with modified pyOTEC-derived code)
+under the MPL-2.0, which is permitted by the EUPL-1.2 as the outbound
+licence of the derivative.
+
+The original pyOTEC copyright and attribution notices are preserved
+in the header of every derived file listed above, as required by
+Article 5 of the EUPL-1.2 (Attribution right).
+
+Reference:
+    Langer J.K.A., Quist J., Blok K. (2024). *The global techno-economic
+    potential of floating, closed-cycle ocean thermal energy conversion.*
+    Journal of Ocean Engineering and Marine Energy 10, 89–110.
+    https://doi.org/10.1007/s40722-023-00301-1

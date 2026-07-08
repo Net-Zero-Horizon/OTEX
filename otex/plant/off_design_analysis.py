@@ -1,4 +1,12 @@
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: MPL-2.0
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Portions of this file derive from pyOTEC by Jannis K. A. Langer
+# (TU Delft), originally distributed under the EUPL-1.2. See NOTICE.
 """
 Created on Thu Feb 23 08:49:22 2023
 

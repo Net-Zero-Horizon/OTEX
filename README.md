@@ -9,11 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/msotocalvo/OTEX/actions/workflows/workflow.yml">
-    <img src="https://github.com/msotocalvo/OTEX/actions/workflows/workflow.yml/badge.svg" alt="CI">
-  </a>
-  <a href="https://codecov.io/gh/msotocalvo/OTEX">
-    <img src="https://codecov.io/gh/msotocalvo/OTEX/branch/main/graph/badge.svg" alt="codecov">
+  <a href="https://github.com/Net-Zero-Horizon/OTEX/actions/workflows/workflow.yml">
+    <img src="https://github.com/Net-Zero-Horizon/OTEX/actions/workflows/workflow.yml/badge.svg" alt="CI">
   </a>
   <a href="https://otex.readthedocs.io">
     <img src="https://readthedocs.org/projects/otex/badge/?version=latest" alt="Documentation">
@@ -33,8 +30,8 @@
   <a href="https://pepy.tech/project/otex">
     <img src="https://static.pepy.tech/badge/otex" alt="Downloads">
   </a>
-  <a href="https://opensource.org/licenses/MIT">
-    <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
+  <a href="https://www.mozilla.org/en-US/MPL/2.0/">
+    <img src="https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg" alt="License">
   </a>
   <a href="https://github.com/astral-sh/ruff">
     <img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff">
@@ -125,7 +122,7 @@ pip install otex[all]
 ### Development Installation
 
 ```bash
-git clone https://github.com/msotocalvo/OTEX.git
+git clone https://github.com/Net-Zero-Horizon/OTEX.git
 cd OTEX
 pip install -e ".[dev]"
 ```
@@ -346,7 +343,12 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **Mozilla Public License v. 2.0** — see
+the [LICENSE](LICENSE) file for the full text. Portions of OTEX derive from
+[pyOTEC](https://github.com/JKALanger/pyOTEC) by Langer et al. (EUPL-1.2);
+see [NOTICE](NOTICE) for attribution. MPL-2.0 is listed as an EUPL-1.2
+compatible licence (Art. 5), so the combined work is redistributed under
+MPL-2.0.
 
 ---
 

@@ -211,15 +211,26 @@ def run_regional_analysis(
         from otex.data.regions import BBox
 
         cfg = inputs['climate_config']
-        # Bbox covering the site cloud, padded by 1° so GCM cells at
-        # the edge are interpolated cleanly.
         site_lons = coordinates_CW[:, 0]
         site_lats = coordinates_CW[:, 1]
+        # CMIP6 delta cache-key alignment: the cache is keyed on
+        # _bbox_hash(bbox). hpc/warm_caches.py pre-warms it (on the
+        # internet-capable login node) using the bbox of the FULL
+        # build_sites catalogue for (region, lat_max) padded by 1°
+        # — NOT the post-data_processing CW site cloud. Compute nodes
+        # have no internet, so the runtime bbox MUST reproduce that
+        # exact catalogue bbox or the lookup misses and falls back to
+        # a (failing) network zarr fetch. Mirror warm_caches'
+        # _site_cloud_bbox precisely: same build_sites call, same
+        # lat_max (its LAT_MAX default is 40.0), same +1° padding.
+        from otex.data import build_sites as _bs_for_bbox
+        _bbox_lat_max = lat_max if lat_max is not None else 40.0
+        _bdf = _bs_for_bbox(studied_region, lat_max=_bbox_lat_max)
         clim_bbox = BBox(
-            north=float(site_lats.max()) + 1.0,
-            south=float(site_lats.min()) - 1.0,
-            east=float(site_lons.max()) + 1.0,
-            west=float(site_lons.min()) - 1.0,
+            north=float(_bdf['latitude'].max()) + 1.0,
+            south=float(_bdf['latitude'].min()) - 1.0,
+            east=float(_bdf['longitude'].max()) + 1.0,
+            west=float(_bdf['longitude'].min()) - 1.0,
         )
 
         for label, depth_m, T_profiles, T_design in (

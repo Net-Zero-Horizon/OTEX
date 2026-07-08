@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-08
+
+### Changed
+- **Licence: MIT → Mozilla Public Licence v. 2.0 (MPL-2.0).** Resolves a
+  licence-consistency issue raised by SoftwareX editorial review:
+  portions of OTEX (six files under ``otex/plant/``, ``otex/economics/``
+  and ``otex/data/``) derive from Langer et al.'s pyOTEC
+  (https://github.com/JKALanger/pyOTEC), which is licensed under
+  EUPL-1.2 and requires derivative works to adopt a compatible licence.
+  MPL-2.0 is explicitly listed as EUPL-1.2-compatible in the EUPL Art. 5
+  Appendix, and preserves file-level integration into Apache-2.0
+  downstreams (e.g. the ESFEX energy-systems framework). See
+  ``NOTICE`` for full attribution and licence-compatibility rationale.
+- ``LICENSE`` file added (canonical MPL-2.0 text, was missing).
+- ``NOTICE`` file added, listing pyOTEC-derived files and reproducing
+  the required attribution.
+- ``README.md``, ``pyproject.toml`` (both the ``license`` field and the
+  OSI classifier) updated to declare MPL-2.0.
+
+### Fixed
+- **PyPI project links** now point to the canonical repository. The
+  ``[project.urls]`` table in ``pyproject.toml`` previously listed
+  ``github.com/otex-dev/otex`` (which does not exist — PyPI users
+  clicking *Repository* / *Issues* landed on a 404). The Homepage,
+  Repository, Issues and (new) Changelog links now point to
+  ``github.com/Net-Zero-Horizon/OTEX``. README CI/coverage badges and
+  the ``git clone`` snippet, previously pinned to the personal fork
+  ``msotocalvo/OTEX``, are also aligned to the canonical org repo.
+- **CMIP6 delta cache-key alignment** (bundled from post-0.3.1
+  work-in-progress). ``run_regional_analysis`` now derives its climate
+  bbox from ``build_sites(studied_region, lat_max)`` so it matches the
+  key ``hpc/warm_caches.py`` writes on the internet-capable login node.
+  Without this, HPC compute nodes fell through to a (failing) network
+  zarr fetch. Also adds ``zarr>=2.10,<3`` and ``gcsfs>=2023.1`` to core
+  dependencies, since ``climate.ensemble_delta`` needs them to read
+  Pangeo's Zarr archive.
+
 ## [0.3.1] - 2026-05-14
 
 ### Fixed
