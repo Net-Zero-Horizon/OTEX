@@ -158,9 +158,20 @@ def otec_sizing(T_WW_in,T_CW_in,del_T_WW,del_T_CW,inputs,cost_level):
     # inputs = parameters_and_constants(cost_level)
     
     T_evap,T_cond,p_evap,p_cond = saturation_pressures_and_temperatures(T_WW_in,T_CW_in,del_T_WW,del_T_CW,inputs)
-            
+
     enthalpies = enthalpies_entropies(p_evap,p_cond,inputs)
-    
+
+    # Rankine Hybrid (Open-Closed) power multiplier — set below only for
+    # this cycle. Sized primary equipment (evaporator, condenser, pumps)
+    # stays IDENTICAL to a plain closed Rankine at ``p_gross``; the
+    # secondary flash-steam turbine only inflates the electric output
+    # (``p_gross_effective`` in the p_net calculation), so CAPEX is
+    # unchanged and LCOE drops by roughly the boost factor.
+    if enthalpies.get('cycle_type') == 'rankine_hybrid':
+        _hybrid_boost = 1.0 + inputs.get('hybrid_secondary_boost', 0.10)
+    else:
+        _hybrid_boost = 1.0
+
     m_NH3,p_pump_NH3 = ammonia_pump_sizing(p_evap,p_cond,enthalpies,inputs)
     
     evaporator = evaporator_sizing(T_WW_in,del_T_WW,T_evap,m_NH3,enthalpies,inputs)
@@ -180,7 +191,10 @@ def otec_sizing(T_WW_in,T_CW_in,del_T_WW,del_T_CW,inputs,cost_level):
     
     p_pump_total = p_pump_NH3/inputs['eff_pump_NH3_mech'] + pipes_WW['p_pump'] + pipes_CW['p_pump']
     
-    p_net = (inputs['p_gross']*inputs['eff_turb_el']*inputs['eff_turb_mech'] + p_pump_total)*inputs['eff_trans']  
+    # For Rankine Hybrid, ``_hybrid_boost`` > 1.0 (set above); for every
+    # other cycle it is exactly 1.0, so the expression collapses to the
+    # original formula and behaviour is unchanged.
+    p_net = (inputs['p_gross']*_hybrid_boost*inputs['eff_turb_el']*inputs['eff_turb_mech'] + p_pump_total)*inputs['eff_trans']
     eff_net = -p_net/evaporator['Q_evap']
     
     if np.any(p_net > 0):
@@ -200,6 +214,11 @@ def otec_sizing(T_WW_in,T_CW_in,del_T_WW,del_T_CW,inputs,cost_level):
                 'A_evap' : evaporator['A_evap'],
                 'Q_evap_nom' : evaporator['Q_evap'],
                 
+                # p_gross_nom is the PRIMARY-cycle nameplate (drives all
+                # downstream CAPEX). The hybrid boost is captured only in
+                # p_net (electrical output including flash turbine), so
+                # CAPEX stays comparable to a plain closed Rankine and
+                # LCOE drops with the extra energy.
                 'p_gross_nom': np.ones(np.shape(p_net),dtype=np.float64)*inputs['p_gross'],
                 'p_net_nom': p_net,
                 'p_pump_total_nom': p_pump_total,

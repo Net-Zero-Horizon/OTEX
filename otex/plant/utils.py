@@ -217,8 +217,25 @@ def enthalpies_entropies(p_evap,p_cond,inputs):
                 'cycle_type': 'kalina',
             }
 
+        elif 'hybrid' in cycle_name:
+            # Rankine Hybrid (Open-Closed): the primary loop states are
+            # identical to the closed Rankine (h_1..h_4), but the class
+            # additionally computes a secondary flash-steam cycle whose
+            # power contribution is captured downstream by
+            # ``plant.sizing.otec_sizing`` via the
+            # ``hybrid_secondary_boost`` factor. Tag the enthalpies dict
+            # with ``cycle_type='rankine_hybrid'`` so sizing can apply
+            # the boost without inspecting the cycle object again.
+            enthalpies = {
+                'h_1': states['h_1'],
+                'h_2': states['h_2'],
+                'h_3': states['h_3'],
+                'h_4': states['h_4'],
+                'cycle_type': 'rankine_hybrid',
+            }
+
         else:
-            # Standard Rankine cycles (closed, open, hybrid)
+            # Standard Rankine cycles (closed, open)
             enthalpies = {
                 'h_1': states['h_1'],
                 'h_2': states['h_2'],

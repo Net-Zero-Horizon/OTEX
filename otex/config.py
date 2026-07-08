@@ -97,6 +97,14 @@ class Efficiencies:
     # Transmission (set dynamically based on distance)
     transmission: float = 0.0           # Placeholder, updated during analysis
 
+    # Rankine Hybrid (Open-Closed): design-time power uplift attributed to
+    # the secondary flash-steam turbine. Applied only when the cycle is
+    # ``rankine_hybrid`` (see ``plant.sizing.otec_sizing`` and
+    # ``plant.utils.enthalpies_entropies``). 0.10 is the midpoint of the
+    # 8-15 % range documented in ``RankineHybridCycle`` — configurable so
+    # sensitivity studies can sweep it.
+    hybrid_secondary_boost: float = 0.10
+
 
 @dataclass
 class SeawaterPipes:
@@ -509,6 +517,7 @@ class OTEXConfig:
             'eff_turb_el': self.efficiencies.turbine_electrical,
             'eff_turb_mech': self.efficiencies.turbine_mechanical,
             'eff_trans': self.efficiencies.transmission,
+            'hybrid_secondary_boost': self.efficiencies.hybrid_secondary_boost,
             'eff_hyd': self.efficiencies.sw_pump_hydraulic,
             'eff_el': self.efficiencies.sw_pump_electrical,
             'efficiencies': [

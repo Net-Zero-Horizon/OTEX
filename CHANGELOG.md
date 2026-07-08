@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-08
+
+### Fixed
+- **Rankine Hybrid cycle produced identical results to Rankine Closed.**
+  ``core.cycles.RankineHybridCycle`` computed a full 8-state hybrid
+  (closed primary + open flash secondary) via
+  ``calculate_cycle_states``, but ``plant.utils.enthalpies_entropies``
+  routed the hybrid through the same ``h_1..h_4``-only branch as a plain
+  closed Rankine (states 5-8 of the flash-steam secondary were silently
+  dropped). Every downstream sizing/LCOE call therefore reduced to the
+  closed-cycle result, and the two cycles emitted byte-different h5
+  files with numerically identical ``LCOE_nom`` and ``p_net_nom``.
+
+### Added
+- ``Efficiencies.hybrid_secondary_boost`` (default ``0.10``) — the
+  design-time power uplift attributed to the flash-steam secondary
+  turbine (midpoint of the 8-15 % range documented in
+  ``RankineHybridCycle``). Exposed in the parameters dict as
+  ``inputs['hybrid_secondary_boost']`` so uncertainty and sensitivity
+  studies can sweep it.
+- ``plant.utils.enthalpies_entropies`` now has an explicit ``hybrid``
+  branch that tags the returned enthalpies with
+  ``cycle_type='rankine_hybrid'``.
+- ``plant.sizing.otec_sizing`` applies ``_hybrid_boost`` **only** to
+  ``p_gross`` inside the ``p_net`` formula — the primary evaporator,
+  condenser and pump sizing use the un-boosted rating, so CAPEX stays
+  identical to the corresponding closed Rankine. The hybrid advantage
+  therefore materialises purely as ~10-15 % more electrical output at
+  the same capital cost, and LCOE drops by roughly the boost factor.
+- ``scripts/regenerate_paper_figure_2.py`` and
+  ``scripts/regenerate_paper_figure_3.py`` — reproducible scripts that
+  rebuild the case-study figures from
+  ``Data_Results/Cuba/Time_series_data_Cuba_*.h5``.
+
 ## [0.4.0] - 2026-07-08
 
 ### Changed
