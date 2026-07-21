@@ -60,11 +60,14 @@ def _cache_key(
     grid_resolution: float,
     offshore_buffer: float,
     lat_max: Optional[float] = None,
+    cmems_verify: bool = False,
+    cmems_verify_depth: Optional[float] = None,
 ) -> str:
     payload = repr((
         [b.as_tuple() for b in bboxes],
         region_label, min_depth, max_depth,
         grid_resolution, offshore_buffer, lat_max,
+        cmems_verify, cmems_verify_depth,
     )).encode()
     return hashlib.sha1(payload).hexdigest()[:14]
 
@@ -152,6 +155,8 @@ def build_sites(
     grid_resolution: float = _DEFAULT_GRID_RES_DEG,
     offshore_buffer_deg: float = _DEFAULT_OFFSHORE_BUFFER_DEG,
     lat_max: Optional[float] = None,
+    cmems_verify: bool = True,
+    cmems_verify_depth: float = 1062.44,
     refresh: bool = False,
 ) -> pd.DataFrame:
     """Build a feasible OTEC sites DataFrame on demand.
@@ -182,6 +187,24 @@ def build_sites(
         Buffer applied to the region's tight admin-0 bbox to capture
         nearby offshore waters. Default 2° (~220 km), which is
         sufficient for any practical OTEC distance to shore.
+    cmems_verify : bool
+        If True (default since 0.5.0), each candidate site is checked
+        against a CMEMS thetao snapshot at ``cmems_verify_depth`` and
+        dropped when the model returns NaN. This removes GEBCO cells
+        that CMEMS does not populate (typically ETOPO2 disagreements
+        near bank/channel bathymetry) *before* the year-long CMEMS
+        download in ``data_processing``, avoiding wasted I/O and
+        reflecting the truly usable pool of sites. Requires
+        ``copernicusmarine`` and a CMEMS-configured environment on the
+        first call per bbox; the mask is cached under
+        ``$OTEX_CACHE_DIR/cmems_mask/`` so subsequent (and offline)
+        calls are free. On failure a warning is logged and the
+        unverified pool is returned.
+    cmems_verify_depth : float
+        Depth (m below sea surface) at which to sample the CMEMS mask.
+        Default 1062.44 m matches OTEX's default cold-water inlet
+        (``SeawaterPipes.cw_inlet_length``) and pyOTEC's
+        ``length_CW_inlet``.
     refresh : bool
         If True, ignore on-disk cache and re-compute.
 
@@ -216,11 +239,13 @@ def build_sites(
         bboxes = [BBox(north=maxy, south=miny, east=maxx, west=minx)]
         region_label = "custom_polygon"
 
-    # Cache lookup. lat_max is part of the key so a run with the filter
-    # active doesn't share its cache with an unfiltered run.
+    # Cache lookup. lat_max, cmems_verify and cmems_verify_depth are part
+    # of the key so runs with the filter active don't share their cache
+    # with unfiltered runs.
     cache_path = _cache_dir() / (_cache_key(
         bboxes, region_label, min_depth, max_depth,
         grid_resolution, offshore_buffer_deg, lat_max,
+        cmems_verify, cmems_verify_depth if cmems_verify else None,
     ) + '.parquet')
     if cache_path.exists() and not refresh:
         return pd.read_parquet(cache_path)
@@ -253,6 +278,46 @@ def build_sites(
     # thermal gradient drops below ~18 °C).
     if lat_max is not None and not sites.empty:
         sites = sites[sites['latitude'].abs() <= float(lat_max)].reset_index(drop=True)
+
+    # CMEMS-mask pre-filter (0.5.0+): drop GEBCO candidates that CMEMS
+    # bathymetry marks as land or above-seafloor at cmems_verify_depth,
+    # so the returned pool matches what data_processing can actually
+    # populate. Falls back gracefully to the unverified pool if the
+    # CMEMS client / credentials are unavailable.
+    if cmems_verify and not sites.empty:
+        try:
+            from .cmems_mask import filter_sites_by_cmems_mask
+            n_before = len(sites)
+            # Union bbox covering every part, padded by the offshore
+            # buffer — mirrors the extent that _build_part scans.
+            wests, easts, souths, norths = zip(*[
+                (_expand_bbox(b, offshore_buffer_deg).west,
+                 _expand_bbox(b, offshore_buffer_deg).east,
+                 _expand_bbox(b, offshore_buffer_deg).south,
+                 _expand_bbox(b, offshore_buffer_deg).north)
+                for b in bboxes
+            ])
+            sites = filter_sites_by_cmems_mask(
+                sites,
+                west=min(wests), east=max(easts),
+                south=min(souths), north=max(norths),
+                depth_m=cmems_verify_depth,
+                refresh=refresh,
+            )
+            print(
+                f"  [build_sites] CMEMS mask filter kept "
+                f"{len(sites)}/{n_before} sites at {cmems_verify_depth:.0f} m."
+            )
+        except Exception as exc:                     # pragma: no cover
+            import warnings
+            warnings.warn(
+                f"[build_sites] CMEMS mask verification skipped "
+                f"({type(exc).__name__}: {exc}). Returning unverified "
+                f"pool — downstream data_processing will drop CMEMS-NaN "
+                f"sites as before.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     # Assign deterministic integer site IDs (lon-lat sorted within each part).
     sites = sites.sort_values(['longitude', 'latitude']).reset_index(drop=True)

@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-22
+
+### Changed
+- **``build_sites`` now pre-filters candidates against the CMEMS grid
+  mask by default.** Previously, ``data.sites.build_sites`` returned
+  every GEBCO ocean cell in the region's bbox that met the depth
+  window. On regions with complex bank/channel bathymetry (Bahamas,
+  Maldives, Marshall Islands…) up to ~93 % of those candidates landed
+  in CMEMS cells that GLORYS12v1 marks as land or above the model
+  seafloor, and ``data_processing`` silently dropped them as NaN. The
+  reported site count for Bahamas at defaults was ``290`` — pyOTEC
+  reports ~1342 for the same domain because its bundled
+  ``CMEMS_points_with_properties.csv`` is CMEMS-grid-aligned by
+  construction. This asymmetry was reported by a user comparing the
+  two frameworks.
+
+  ``build_sites`` now downloads a single-time, single-depth CMEMS
+  ``thetao`` snapshot at ``cmems_verify_depth`` (default ``1062.44 m``,
+  matching ``SeawaterPipes.cw_inlet_length`` and pyOTEC's
+  ``length_CW_inlet``), extracts its boolean valid-cell mask, and
+  discards GEBCO candidates that fall on CMEMS-invalid cells. The
+  mask is cached under ``$OTEX_CACHE_DIR/cmems_mask/`` so subsequent
+  (and offline) calls are free.
+
+  For Bahamas at defaults the pool now returns ``2618`` sites —
+  the remaining gap vs pyOTEC (~1342) is explained by OTEX's wider
+  admin-0 bbox with a 2° offshore buffer.
+
+  Opt out with ``build_sites(..., cmems_verify=False)`` (matches the
+  0.4.x behaviour). The graceful fallback still handles missing
+  ``copernicusmarine`` / CMEMS credentials with a ``RuntimeWarning``
+  and returns the un-filtered pool.
+
+### Added
+- ``otex.data.cmems_mask`` — new module exposing
+  ``cmems_valid_mask(west, east, south, north, depth_m, refresh=False)``
+  and ``filter_sites_by_cmems_mask(sites, ...)``. Both cache the
+  downloaded snapshot per ``(bbox, depth)`` tuple under
+  ``$OTEX_CACHE_DIR/cmems_mask/`` for offline reuse on HPC compute
+  nodes.
+- ``build_sites`` gained ``cmems_verify: bool = True`` and
+  ``cmems_verify_depth: float = 1062.44`` keyword arguments. Both are
+  part of the on-disk cache key so verified and unverified pools are
+  cached independently.
+
 ## [0.4.1] - 2026-07-08
 
 ### Fixed
