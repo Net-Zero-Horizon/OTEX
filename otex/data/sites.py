@@ -62,12 +62,17 @@ def _cache_key(
     lat_max: Optional[float] = None,
     cmems_verify: bool = False,
     cmems_verify_depth: Optional[float] = None,
+    data_source: str = 'CMEMS',
 ) -> str:
     payload = repr((
         [b.as_tuple() for b in bboxes],
         region_label, min_depth, max_depth,
         grid_resolution, offshore_buffer, lat_max,
         cmems_verify, cmems_verify_depth,
+        # data_source only matters when mask verification is active.
+        # Kept out of the tuple when unverified so the raw GEBCO cache
+        # stays shared across CMEMS and HYCOM callers.
+        (data_source.upper() if cmems_verify else None),
     )).encode()
     return hashlib.sha1(payload).hexdigest()[:14]
 
@@ -103,10 +108,58 @@ def _build_part(
     max_depth: float,
     grid_resolution: float,
     offshore_buffer: float,
+    cmems_verify: bool = False,
+    cmems_verify_depth: float = 1062.44,
+    data_source: str = 'CMEMS',
+    hycom_year: int = 2023,
+    refresh: bool = False,
 ) -> pd.DataFrame:
-    """Build sites for a single bbox part (used per-part for multi-bbox regions)."""
+    """Build sites for a single bbox part (used per-part for multi-bbox regions).
+
+    When ``cmems_verify=True`` (default from :func:`build_sites`) the
+    candidate coordinates come directly from the temperature dataset's
+    own grid mask — every returned site is guaranteed to line up with a
+    valid CMEMS/HYCOM cell at ``cmems_verify_depth``, and no snap step
+    is needed downstream. When ``cmems_verify=False`` the legacy
+    synthetic ``_make_grid`` path is used and any misalignment with the
+    downstream dataset is left for ``data_processing`` to drop.
+    """
     expanded = _expand_bbox(bbox, offshore_buffer)
-    lon, lat = _make_grid(expanded, grid_resolution)
+
+    if cmems_verify:
+        # Use the temperature dataset's own valid-cell grid as the
+        # candidate pool. Alignment with the downstream lookup in
+        # ``otex.data.cmems._extract_year_data`` is guaranteed by
+        # construction.
+        src = data_source.upper()
+        if src == 'HYCOM':
+            from .hycom_mask import hycom_valid_mask
+            lons_grid, lats_grid, mask_arr = hycom_valid_mask(
+                west=expanded.west, east=expanded.east,
+                south=expanded.south, north=expanded.north,
+                depth_m=cmems_verify_depth,
+                year=hycom_year, refresh=refresh,
+            )
+        else:
+            from .cmems_mask import cmems_valid_mask
+            lons_grid, lats_grid, mask_arr = cmems_valid_mask(
+                west=expanded.west, east=expanded.east,
+                south=expanded.south, north=expanded.north,
+                depth_m=cmems_verify_depth, refresh=refresh,
+            )
+        # Enumerate valid cells directly. Round to 3 decimals at
+        # float64 precision so keys line up with the downstream
+        # lookup (which does the same after the 0.5.1 fix).
+        lat_idx, lon_idx = np.where(mask_arr)
+        lon = np.round(lons_grid[lon_idx].astype(np.float64), 3)
+        lat = np.round(lats_grid[lat_idx].astype(np.float64), 3)
+    else:
+        # Legacy path: synthetic uniform grid at grid_resolution.
+        # Downstream data_processing may still drop cells whose
+        # coordinates don't match the dataset native grid — the
+        # 0.5.0/0.5.1 alignment work only kicks in when
+        # cmems_verify=True.
+        lon, lat = _make_grid(expanded, grid_resolution)
 
     # 1. Bathymetry: keep only ocean cells with depth in [min_depth, max_depth].
     bat = fetch_bathymetry(
@@ -157,6 +210,8 @@ def build_sites(
     lat_max: Optional[float] = None,
     cmems_verify: bool = True,
     cmems_verify_depth: float = 1062.44,
+    data_source: str = 'CMEMS',
+    hycom_year: int = 2023,
     refresh: bool = False,
 ) -> pd.DataFrame:
     """Build a feasible OTEC sites DataFrame on demand.
@@ -201,18 +256,34 @@ def build_sites(
         calls are free. On failure a warning is logged and the
         unverified pool is returned.
     cmems_verify_depth : float
-        Depth (m below sea surface) at which to sample the CMEMS mask.
+        Depth (m below sea surface) at which to sample the mask.
         Default 1062.44 m matches OTEX's default cold-water inlet
         (``SeawaterPipes.cw_inlet_length``) and pyOTEC's
         ``length_CW_inlet``. ``regional.run_regional_analysis`` passes
         the run-time ``inputs['length_CW_inlet']`` instead of relying on
         the default, so single-depth runs always mask at the same depth
-        CMEMS will be queried on. For the formal per-site optimiser
-        (``optimization`` package), which sweeps ``depth_CW`` inside
-        ``DepthLimits`` (typically 600-3000 m), pass this argument set
-        to the deepest depth the search will visit — or disable the
-        pre-filter with ``cmems_verify=False`` and let each candidate
-        depth's NaN mask be applied downstream on the fly.
+        the temperature dataset will be queried on. For the formal
+        per-site optimiser (``optimization`` package), which sweeps
+        ``depth_CW`` inside ``DepthLimits`` (typically 600-3000 m),
+        pass this argument set to the deepest depth the search will
+        visit — or disable the pre-filter with ``cmems_verify=False``
+        and let each candidate depth's NaN mask be applied downstream
+        on the fly.
+    data_source : {'CMEMS', 'HYCOM'}
+        Temperature dataset that will be queried downstream. Selects
+        which grid mask is used for the pre-filter: CMEMS (1/12°,
+        ETOPO2 bathymetry) or HYCOM (~0.04° lat × 0.08° lon, HYCOM
+        native bathymetry). Snapping and dedup are done against the
+        actual grid centres of the chosen dataset so that surviving
+        sites match what ``otex.data.cmems.data_processing`` will
+        populate. ``regional.run_regional_analysis`` forwards its own
+        ``inputs['data']`` here.
+    hycom_year : int
+        Year used to pick the HYCOM experiment for the mask snapshot
+        (``GLBv0.08/expt_53.X`` for 1994-2015, ``GLBy0.08/expt_93.0``
+        for 2019-2024). Ignored when ``data_source == 'CMEMS'``.
+        Default 2023 picks the current analysis product; the mask is
+        bathymetric and effectively time-invariant.
     refresh : bool
         If True, ignore on-disk cache and re-compute.
 
@@ -247,19 +318,23 @@ def build_sites(
         bboxes = [BBox(north=maxy, south=miny, east=maxx, west=minx)]
         region_label = "custom_polygon"
 
-    # Cache lookup. lat_max, cmems_verify and cmems_verify_depth are part
-    # of the key so runs with the filter active don't share their cache
-    # with unfiltered runs.
+    # Cache lookup. lat_max, cmems_verify, cmems_verify_depth and
+    # data_source are all part of the key so runs with different mask
+    # settings don't share caches.
     cache_path = _cache_dir() / (_cache_key(
         bboxes, region_label, min_depth, max_depth,
         grid_resolution, offshore_buffer_deg, lat_max,
         cmems_verify, cmems_verify_depth if cmems_verify else None,
+        data_source=data_source,
     ) + '.parquet')
     if cache_path.exists() and not refresh:
         return pd.read_parquet(cache_path)
 
     # Build each part, then concatenate. Sites in different parts
-    # share a global ID space.
+    # share a global ID space. When cmems_verify=True the temperature
+    # dataset's own grid is used inside _build_part, so surviving
+    # sites are already aligned with the downstream lookup — no snap
+    # step needed here at the outer level.
     frames = []
     for part in bboxes:
         df = _build_part(
@@ -267,6 +342,11 @@ def build_sites(
             min_depth=min_depth, max_depth=max_depth,
             grid_resolution=grid_resolution,
             offshore_buffer=offshore_buffer_deg,
+            cmems_verify=cmems_verify,
+            cmems_verify_depth=cmems_verify_depth,
+            data_source=data_source,
+            hycom_year=hycom_year,
+            refresh=refresh,
         )
         frames.append(df)
     sites = pd.concat(frames, ignore_index=True)
@@ -287,45 +367,13 @@ def build_sites(
     if lat_max is not None and not sites.empty:
         sites = sites[sites['latitude'].abs() <= float(lat_max)].reset_index(drop=True)
 
-    # CMEMS-mask pre-filter (0.5.0+): drop GEBCO candidates that CMEMS
-    # bathymetry marks as land or above-seafloor at cmems_verify_depth,
-    # so the returned pool matches what data_processing can actually
-    # populate. Falls back gracefully to the unverified pool if the
-    # CMEMS client / credentials are unavailable.
     if cmems_verify and not sites.empty:
-        try:
-            from .cmems_mask import filter_sites_by_cmems_mask
-            n_before = len(sites)
-            # Union bbox covering every part, padded by the offshore
-            # buffer — mirrors the extent that _build_part scans.
-            wests, easts, souths, norths = zip(*[
-                (_expand_bbox(b, offshore_buffer_deg).west,
-                 _expand_bbox(b, offshore_buffer_deg).east,
-                 _expand_bbox(b, offshore_buffer_deg).south,
-                 _expand_bbox(b, offshore_buffer_deg).north)
-                for b in bboxes
-            ])
-            sites = filter_sites_by_cmems_mask(
-                sites,
-                west=min(wests), east=max(easts),
-                south=min(souths), north=max(norths),
-                depth_m=cmems_verify_depth,
-                refresh=refresh,
-            )
-            print(
-                f"  [build_sites] CMEMS mask filter kept "
-                f"{len(sites)}/{n_before} sites at {cmems_verify_depth:.0f} m."
-            )
-        except Exception as exc:                     # pragma: no cover
-            import warnings
-            warnings.warn(
-                f"[build_sites] CMEMS mask verification skipped "
-                f"({type(exc).__name__}: {exc}). Returning unverified "
-                f"pool — downstream data_processing will drop CMEMS-NaN "
-                f"sites as before.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+        # Mask filtering + grid alignment happened inside _build_part.
+        # Nothing left to do here besides the summary line.
+        print(
+            f"  [build_sites] {data_source.upper()} native grid: "
+            f"{len(sites)} sites at {cmems_verify_depth:.0f} m."
+        )
 
     # Assign deterministic integer site IDs (lon-lat sorted within each part).
     sites = sites.sort_values(['longitude', 'latitude']).reset_index(drop=True)

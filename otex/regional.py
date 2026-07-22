@@ -144,15 +144,26 @@ def run_regional_analysis(
         min_depth=abs(inputs['min_depth']),
         max_depth=abs(inputs['max_depth']),
         lat_max=lat_max,
-        # 0.5.0+: pre-filter candidates against the CMEMS grid mask at
-        # the depth we are about to query. Uses the run-time
+        # 0.5.0+: pre-filter candidates against the temperature grid
+        # mask at the depth we are about to query. Uses the run-time
         # length_CW_inlet from inputs (not the hardcoded 1062 default)
         # so that runs which override the CW inlet depth get their
-        # mask on the same grid CMEMS will be queried on downstream.
-        # For optimizer runs that sweep depth_CW, pass
+        # mask on the same grid the dataset will be queried on
+        # downstream. For optimizer runs that sweep depth_CW, pass
         # cmems_verify_depth explicitly (typically max_depth) or set
         # cmems_verify=False.
         cmems_verify_depth=float(inputs['length_CW_inlet']),
+        # 0.5.2+: pick the mask that matches the actual data source
+        # (CMEMS or HYCOM). Without this, HYCOM runs would silently
+        # snap sites to the CMEMS grid — the two grids don't align
+        # (CMEMS 1/12°, HYCOM ~0.04°×0.08°), so downstream lookups
+        # would match ~zero cells.
+        data_source=str(inputs.get('data', 'CMEMS')),
+        # Year passed to HYCOM's experiment selector (harmless for
+        # CMEMS). Prefer the run's year_start; fall back to the
+        # single-year date_start or 2023 if neither is set.
+        hycom_year=int(inputs.get('year_start')
+                       or (inputs['date_start'][:4] if inputs.get('date_start') else 2023)),
     )
     sites_df = sites_df[
         (sites_df['water_depth'] <= inputs['min_depth'])

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-22
+
+### Changed
+- **``build_sites`` now uses the ocean dataset's native grid directly
+  when ``cmems_verify=True`` (Option C architectural refactor).**
+  Previously ``_build_part`` generated a uniform GEBCO-derived grid via
+  ``_make_grid`` and then post-filtered/snapped to CMEMS cell centres
+  in an outer step; that snap-and-dedup pattern extended cleanly to
+  CMEMS's symmetric 1/12° grid but broke on HYCOM GLBy0.08's
+  asymmetric ~0.04° lat × 0.08° lon grid (site keys landed off-cell
+  and ``data_processing`` silently dropped them). ``_build_part`` now
+  dispatches directly to ``cmems_valid_mask`` or ``hycom_valid_mask``
+  based on ``data_source`` and seeds the site list from the dataset's
+  own ``(lon, lat)`` arrays — no snap step, no cross-grid drift, no
+  duplicates. The uniform ``_make_grid`` path is retained for the
+  ``cmems_verify=False`` fallback.
+
+### Added
+- **HYCOM support for ``cmems_verify=True``** via new
+  ``otex/data/hycom_mask.py`` (symmetric counterpart to
+  ``cmems_mask.py``). Uses the HYCOM OPeNDAP endpoint to fetch a
+  single-time, single-depth ``water_temp`` snapshot and derive the
+  valid-ocean mask. Cached under ``$OTEX_CACHE_DIR/hycom_mask/``.
+- ``data_source`` and ``hycom_year`` parameters plumbed through
+  ``regional.run_regional_analysis`` → ``load_sites`` → ``build_sites``
+  so a HYCOM run picks the correct mask backend automatically.
+
+### Fixed
+- HYCOM regression introduced silently in 0.5.1: the CMEMS-specific
+  mask was being applied to HYCOM runs, filtering HYCOM sites against
+  a grid they don't live on. Bahamas HYCOM went from ~2600 valid
+  candidates down to ~11. Fixed as part of the Option C refactor —
+  each dataset is now filtered against its own mask.
+
+### Validated
+- **CMEMS Bahamas E2E**: ``build_sites`` emits 2596 sites, all 2596
+  land in ``Time_series_data_*.h5`` (perfect match, 6.27 min runtime).
+- **HYCOM Bahamas alignment**: ``build_sites`` emits 6180 sites
+  (2.4× the previous count thanks to HYCOM's asymmetric native grid),
+  all 6180 provably in the HYCOM valid-cell set by direct emulation of
+  ``download_data`` + ``_extract_year_data`` (0 mismatches). Full-year
+  E2E was blocked by a transient HYCOM OPeNDAP timeout during the year
+  download (server-side, not a correctness issue).
+
 ## [0.5.1] - 2026-07-22
 
 ### Fixed
