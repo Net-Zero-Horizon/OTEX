@@ -144,6 +144,15 @@ def run_regional_analysis(
         min_depth=abs(inputs['min_depth']),
         max_depth=abs(inputs['max_depth']),
         lat_max=lat_max,
+        # 0.5.0+: pre-filter candidates against the CMEMS grid mask at
+        # the depth we are about to query. Uses the run-time
+        # length_CW_inlet from inputs (not the hardcoded 1062 default)
+        # so that runs which override the CW inlet depth get their
+        # mask on the same grid CMEMS will be queried on downstream.
+        # For optimizer runs that sweep depth_CW, pass
+        # cmems_verify_depth explicitly (typically max_depth) or set
+        # cmems_verify=False.
+        cmems_verify_depth=float(inputs['length_CW_inlet']),
     )
     sites_df = sites_df[
         (sites_df['water_depth'] <= inputs['min_depth'])

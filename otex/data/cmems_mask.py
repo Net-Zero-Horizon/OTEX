@@ -180,4 +180,27 @@ def filter_sites_by_cmems_mask(
     keep = np.zeros(len(sites), dtype=bool)
     ok = in_range
     keep[ok] = mask[la_idx[ok], lo_idx[ok]]
-    return sites[keep].reset_index(drop=True)
+    filtered = sites[keep].reset_index(drop=True).copy()
+    if len(filtered) == 0:
+        return filtered
+
+    # Snap each surviving site's coordinates to its nearest CMEMS grid
+    # center, rounded to 3 decimals to match the ``np.round(..., 3)``
+    # applied in ``otex.data.cmems._extract_year_data``. This is
+    # essential: OTEX's ``_make_grid`` places candidates on multiples
+    # of 1/12° starting from the region bbox origin, but the CMEMS
+    # native grid has a global half-cell offset (~9 km at the equator).
+    # Without snapping, ``_extract_year_data``'s exact ``(lon, lat)``
+    # lookup misses ~90 % of the mask-verified sites even though CMEMS
+    # actually has data at their nearest cells.
+    kept_lo = lo_idx[keep]
+    kept_la = la_idx[keep]
+    filtered['longitude'] = np.round(lons[kept_lo], 3)
+    filtered['latitude'] = np.round(lats[kept_la], 3)
+    # Multiple GEBCO candidates can snap to the same CMEMS cell —
+    # dedupe deterministically (first wins, preserving the input
+    # sort order of build_sites).
+    filtered = filtered.drop_duplicates(
+        subset=['longitude', 'latitude'], keep='first'
+    ).reset_index(drop=True)
+    return filtered

@@ -204,7 +204,15 @@ def build_sites(
         Depth (m below sea surface) at which to sample the CMEMS mask.
         Default 1062.44 m matches OTEX's default cold-water inlet
         (``SeawaterPipes.cw_inlet_length``) and pyOTEC's
-        ``length_CW_inlet``.
+        ``length_CW_inlet``. ``regional.run_regional_analysis`` passes
+        the run-time ``inputs['length_CW_inlet']`` instead of relying on
+        the default, so single-depth runs always mask at the same depth
+        CMEMS will be queried on. For the formal per-site optimiser
+        (``optimization`` package), which sweeps ``depth_CW`` inside
+        ``DepthLimits`` (typically 600-3000 m), pass this argument set
+        to the deepest depth the search will visit — or disable the
+        pre-filter with ``cmems_verify=False`` and let each candidate
+        depth's NaN mask be applied downstream on the fly.
     refresh : bool
         If True, ignore on-disk cache and re-compute.
 

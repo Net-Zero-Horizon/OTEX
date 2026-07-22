@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-22
+
+### Fixed
+- **``build_sites`` CMEMS mask now aligns with the run-time CW inlet
+  depth, not the hardcoded 1062 m default.** In 0.5.0 the mask was
+  always sampled at ``1062.44 m`` — correct for a default single-depth
+  run, but silently misaligned when a user changed
+  ``SeawaterPipes.cw_inlet_length`` from the default. Sites valid at
+  the actual queried depth could be dropped (or, less commonly,
+  unusable sites survive) if that depth differed from 1062 m.
+  ``regional.run_regional_analysis`` now forwards
+  ``cmems_verify_depth=float(inputs['length_CW_inlet'])`` to
+  ``load_sites`` / ``build_sites``, so the mask is sampled on the same
+  CMEMS depth level the downstream ``download_data`` will query.
+
+- **``filter_sites_by_cmems_mask`` now snaps candidate coordinates to
+  the nearest CMEMS grid centre.** End-to-end validation of the 0.5.0
+  fix revealed that only ~11 % of mask-verified candidates were
+  reaching ``Time_series_data_*.h5`` (Bahamas: 2618 verified sites,
+  but only 290 survived ``data_processing``). Root cause: OTEX's
+  ``_make_grid`` places candidates on multiples of ``1/12°`` measured
+  from the region bbox origin, but the CMEMS native grid has a global
+  half-cell offset (~9 km at the equator), so the exact ``(lon, lat)``
+  lookup in ``cmems._extract_year_data`` missed almost every
+  candidate. ``filter_sites_by_cmems_mask`` now replaces each surviving
+  site's coordinates with the actual CMEMS cell centre (rounded to 3
+  decimals to match the downstream lookup rounding) and deduplicates
+  when multiple GEBCO candidates snap to the same cell.
+
+- **``cmems._extract_year_data`` now rounds coordinates at float64
+  precision instead of float32.** Pre-existing bug uncovered by the
+  same E2E validation: the CMEMS netCDF stores ``longitude`` and
+  ``latitude`` as float32, and ``np.round(<float32>, 3)`` returned the
+  nearest float32 to X.XXX — which for values like ``23.833`` is
+  ``23.83300018310547`` because 23.833 has no exact float32
+  representation. The ``sites_dict`` lookup key downstream promotes
+  that value to float64 preserving the ~1e-7 offset, while the
+  site-side keys — built from float64 coordinates — round cleanly to
+  ``23.833``, so the two never matched. Coordinates are now upcast to
+  float64 *before* rounding so both sides align.
+
+Together these three fixes make ``build_sites`` output the exact set
+of sites ``data_processing`` will populate: no silent NaN-drop
+downstream. End-to-end regression on Bahamas at defaults: 2618
+mask-verified sites in → 2618 sites out (was 290 in 0.5.0).
+
+### Added
+- ``build_sites`` docstring now documents the interaction with the
+  formal per-site optimiser (``optimization`` package), which sweeps
+  ``depth_CW`` inside ``DepthLimits`` (default 600-3000 m): optimiser
+  callers should either pass ``cmems_verify_depth`` set to the deepest
+  depth the search will visit or disable the pre-filter with
+  ``cmems_verify=False`` and let the on-the-fly NaN mask handle
+  candidate depths individually.
+
 ## [0.5.0] - 2026-07-22
 
 ### Changed

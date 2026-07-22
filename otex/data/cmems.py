@@ -324,8 +324,19 @@ def _extract_year_data(year_files, sites_dict, time_origin):
 
     for f in year_files:
         ds = netCDF4.Dataset(f, 'r')
-        latitude = np.round(ds.variables['latitude'][:], 3)
-        longitude = np.round(ds.variables['longitude'][:], 3)
+        # Upcast float32 → float64 BEFORE rounding: CMEMS stores the
+        # coordinate axes as float32, and ``np.round(<float32>, 3)``
+        # returns the nearest float32 to X.XXX — which for values like
+        # 23.833 is not exactly representable, and comes back as
+        # 23.83300018310547. The (lon, lat) lookup key downstream is
+        # built with ``float(lon_val)`` which promotes that same
+        # imprecise value to float64, so the ``sites_dict`` key
+        # (built from float64 site coords via ``np.round(..., 3)``,
+        # which does round cleanly at float64 precision) can't match
+        # it. Promoting first makes the round operate at float64
+        # precision on both sides and the ~1e-7 offset disappears.
+        latitude = np.round(ds.variables['latitude'][:].astype(np.float64), 3)
+        longitude = np.round(ds.variables['longitude'][:].astype(np.float64), 3)
         depth = int(ds.variables['depth'][:])
         T_water = np.asarray(ds.variables['thetao'][:], dtype=np.float64)
         # Collapse the depth axis (typically length 1) and the spatial
